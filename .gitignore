@@ -1,0 +1,4 @@
+__pycache__
+results*
+img_log*
+*.pth
