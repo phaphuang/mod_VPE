@@ -150,6 +150,9 @@ def train(e):
       torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2)
       torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2)
 
+    if (i > 0) and (i % 10 == 0):
+        break
+
   if e%save_epoch == 0:
     class_target = torch.LongTensor(list(range(n_classes)))
     class_template = tr_loader.load_template(class_target)
@@ -173,6 +176,7 @@ def score_NN(pred, class_feature, label, n_classes):
   for i in range(n_classes):
     cls_feat = class_feature[i,:]
     cls_mat = cls_feat.repeat(pred.shape[0],1)
+    print("Class Feature Shape: ", class_feature.shape, cls_feat.shape, pred.shape)
     # euclidean distance
     sample_distance[:,i] = torch.norm(pred - cls_mat,p=2, dim=1)
   

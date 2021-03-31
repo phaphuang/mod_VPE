@@ -101,6 +101,8 @@ class gtsrb2TT100KLoader(Dataset):
     # NHWC -> NCHW
     img = img.transpose(2, 0, 1)
     img = torch.from_numpy(img).float()
+
+    img = (img * 2) - 1
     
     return img
 

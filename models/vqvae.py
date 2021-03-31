@@ -208,9 +208,9 @@ class Decoder(nn.Module):
         x = self._residual_stack(x)
         
         x = self._conv_trans_1(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
         
-        return self._conv_trans_2(x)
+        return torch.tanh(self._conv_trans_2(x))
 
 class VQVAEModel(nn.Module):
     def __init__(self, num_hiddens, num_residual_layers, num_residual_hiddens, 

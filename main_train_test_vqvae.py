@@ -31,7 +31,7 @@ parser.add_argument('--exp',        type=str,   default='exp_list',     help='tr
 parser.add_argument('--resume',     type=str,   default=None,           help='Resume training from previously saved model')
 
 parser.add_argument('--epochs',     type=int,   default=2000,           help='Training epochs')
-parser.add_argument('--lr',         type=float, default=1e-4,           help='Learning rate')
+parser.add_argument('--lr',         type=float, default=1e-3,           help='Learning rate')
 parser.add_argument('--batch_size', type=int,   default=64,            help='Batch size')
 
 parser.add_argument('--img_cols',   type=int,   default=64,             help='resized image width')
@@ -44,7 +44,7 @@ random.seed(args.seed)
 torch.manual_seed(args.seed)
 plt.switch_backend('agg')  # Allow plotting when running remotely
 
-save_epoch = 100 # save log images per save_epoch
+save_epoch = 2 # save log images per save_epoch
 
 # 02 rotation + flip augmentation option
 # Setup Augmentations
@@ -85,7 +85,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 data_loader = get_loader(args.dataset)
 data_path = get_data_path(args.dataset)
 
-tr_loader = data_loader(data_path, args.exp, is_transform=True, split='train', img_size=(args.img_rows, args.img_cols), augmentations=data_aug_tr)
+tr_loader = data_loader(data_path[:100], args.exp, is_transform=True, split='train', img_size=(args.img_rows, args.img_cols), augmentations=data_aug_tr)
 te_loader = data_loader(data_path, args.exp, is_transform=True, split='test', img_size=(args.img_rows, args.img_cols), augmentations=data_aug_te)
 
 trainloader = DataLoader(tr_loader, batch_size=args.batch_size, num_workers=args.workers, shuffle=True, pin_memory=True)
@@ -122,36 +122,41 @@ def train(e):
 
     vq_loss, recon, perplexity, z1, z2 = net(input)
     recon_error = F.mse_loss(recon, template)
+    #print(recon_error, vq_loss)
     loss = recon_error + vq_loss
-    print('Epoch:%d  Batch:%d/%d  loss:%08f  perplexity:%08f'%(e, i, batch_iter, loss.data/input.numel(), perplexity.data/input.numel()))
+    print('Epoch:%d  Batch:%d/%d  loss:%08f  perplexity:%08f'%(e, i, batch_iter, loss.data, perplexity.data))
    
     f_loss = open(os.path.join(result_path, "log_loss.txt"),'a')
-    f_loss.write('Epoch:%d  Batch:%d/%d  loss:%08f  perplexity:%08f\n'%(e, i, batch_iter, loss.data/input.numel(), perplexity.data/input.numel()))
+    f_loss.write('Epoch:%d  Batch:%d/%d  loss:%08f  perplexity:%08f\n'%(e, i, batch_iter, loss.data, perplexity.data))
     f_loss.close()
     
     loss.backward()
     optimizer.step()
 
     if i < 1 and (e%save_epoch == 0):
+    #if (e%save_epoch == 0):
       out_folder =  "%s/Epoch_%d_train"%(outimg_path, e)
       out_root = Path(out_folder)
       if not out_root.is_dir():
         os.mkdir(out_root)
 
-      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2)
+      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
       #torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
-      torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2)
-      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2)
+      torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+
+    # if (i > 0) and (i % 10 == 0):
+    #     break
 
   if e%save_epoch == 0:
     class_target = torch.LongTensor(list(range(n_classes)))
     class_template = tr_loader.load_template(class_target)
     class_template = class_template.cuda(async=True)
     with torch.no_grad():
-      class_recon, class_mu, class_logvar, _ = net(class_template)
+      _, class_recon, _, _, _ = net(class_template)
     
     torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)  
-    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2) 
+    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2)
   
 def score_NN(pred, class_feature, label, n_classes):
 
@@ -165,7 +170,13 @@ def score_NN(pred, class_feature, label, n_classes):
   label = label.numpy()
   for i in range(n_classes):
     cls_feat = class_feature[i,:]
+    
+    pred = pred.view(pred.shape[0], -1)
+    cls_feat = cls_feat.view(-1)
+    
     cls_mat = cls_feat.repeat(pred.shape[0],1)
+
+    #print("Class Feature Shape: ", class_feature.shape, cls_feat.shape, pred.shape) # torch.Size([36, 128, 16, 16]) torch.Size([32768]) torch.Size([64, 32768])
     # euclidean distance
     sample_distance[:,i] = torch.norm(pred - cls_mat,p=2, dim=1)
   
@@ -219,14 +230,14 @@ def test(e, best_acc):
       if not out_root.is_dir():
         os.mkdir(out_root)
 
-      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2)
+      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
       #torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
-      torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2)
-      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2)
+      torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
 
   if e%save_epoch == 0:
-    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)  
-    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2)  
+    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
+    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
 
   acc_all = accum_class.sum() / accum_all.sum() 
   acc_cls = torch.div(accum_class, accum_all)
