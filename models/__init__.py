@@ -1,5 +1,6 @@
 from models.vaeIdsiaStn import *
 from models.vqvae import VQVAEModel
+from models.vqcvae import VQ_CVAE
 
 def get_model(name, n_classes=None):
     model = _get_model_instance(name)
@@ -14,6 +15,9 @@ def get_model(name, n_classes=None):
     
     if name is 'vqvae':
         model = model(num_hiddens=128, num_residual_layers=2, num_residual_hiddens=32, num_embeddings=512, embedding_dim=64, commitment_cost=0.25, decay=0.99)
+    
+    if name is 'vqcvae':
+        model = model(d=128, k=512, num_channels=3)
 
     return model
 
@@ -23,6 +27,7 @@ def _get_model_instance(name):
             'vaeIdsiaStn' : VAEIdsia,
             'vaeIdsia' : VAEIdsia,
             'vqvae' : VQVAEModel,
+            'vqcvae' : VQ_CVAE,
         }[name]
     except:
         print('Model {} not available'.format(name))
