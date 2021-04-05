@@ -25,13 +25,13 @@ from augmentations import *
 # Setup
 parser = ArgumentParser(description='Variational Prototyping Encoder (VPE)')
 parser.add_argument('--seed',       type=int,   default=42,             help='Random seed')
-parser.add_argument('--arch',       type=str,   default='vqcvae',  help='network type: vaeIdsia, vaeIdsiaStn')
+parser.add_argument('--arch',       type=str,   default='vqvae2',  help='network type: vaeIdsia, vaeIdsiaStn')
 parser.add_argument('--dataset',    type=str,   default='belga2flickr', help='dataset to use [gtsrb, gtsrb2TT100K, belga2flickr, belga2toplogo]')
 parser.add_argument('--exp',        type=str,   default='exp_list',     help='training scenario')
 parser.add_argument('--resume',     type=str,   default=None,           help='Resume training from previously saved model')
 
 parser.add_argument('--epochs',     type=int,   default=2000,           help='Training epochs')
-parser.add_argument('--lr',         type=float, default=2e-4,           help='Learning rate')
+parser.add_argument('--lr',         type=float, default=1e-4,           help='Learning rate')
 parser.add_argument('--batch_size', type=int,   default=8,            help='Batch size')
 
 parser.add_argument('--img_cols',   type=int,   default=64,             help='resized image width')
@@ -44,7 +44,7 @@ random.seed(args.seed)
 torch.manual_seed(args.seed)
 plt.switch_backend('agg')  # Allow plotting when running remotely
 
-save_epoch = 100 # save log images per save_epoch
+save_epoch = 50 # save log images per save_epoch
 
 # 02 rotation + flip augmentation option
 # Setup Augmentations
@@ -107,6 +107,8 @@ num_test = len(te_loader.targets)
 batch_iter = math.ceil(num_train/args.batch_size)
 batch_iter_test = math.ceil(num_test/args.batch_size)
 
+crit = torch.nn.MSELoss()
+
 def train(e):
   n_classes = tr_loader.n_classes
   n_classes_te = te_loader.n_classes
@@ -116,23 +118,23 @@ def train(e):
   
   for i, (input, target, template) in enumerate(trainloader):
 
-    if i > 10:
-      break
+    # if i > 10:
+    #   break
 
     optimizer.zero_grad()
     target = torch.squeeze(target)
     input, template = input.cuda(async=True), template.cuda(async=True)
 
-    recon, z1, z2, argmin = net(input)
+    recon, d, _, _ = net(input)
     
-    #print(recon_error, vq_loss)
-    loss = net.loss_function(input, recon, z1, z2, argmin)
-
-    mse_loss, vq_loss, commit_loss = net.latest_losses()
-    print('Epoch:%d  Batch:%d/%d  MSE loss:%08f  VQ loss:%08f Commit loss:%08f'%(e, i, batch_iter, mse_loss.data, vq_loss.data, commit_loss.data))
+    # Calculate loss function
+    mse_loss = crit(recon, input)
+    loss = mse_loss + 0.25 * sum(d)
+    
+    print('Epoch:%d  Batch:%d/%d  Total Loss:%08f MSE loss:%08f  VQ loss:%08f'%(e, i, batch_iter, loss.data, mse_loss.data, sum(d).data))
    
     f_loss = open(os.path.join(result_path, "log_loss.txt"),'a')
-    f_loss.write('Epoch:%d  Batch:%d/%d  MSE loss:%08f  VQ loss:%08f Commit loss:%08f'%(e, i, batch_iter, mse_loss.data, vq_loss.data, commit_loss.data))
+    f_loss.write('Epoch:%d  Batch:%d/%d  Total Loss:%08f MSE loss:%08f  VQ loss:%08f'%(e, i, batch_iter, loss.data, mse_loss.data, sum(d).data))
     f_loss.close()
     
     loss.backward()
@@ -176,10 +178,10 @@ def score_NN(pred, class_feature, label, n_classes):
   for i in range(n_classes):
     cls_feat = class_feature[i,:]
     
-    #pred = pred.view(pred.shape[0], -1)
-    #cls_feat = cls_feat.view(-1)
+    pred = pred.view(pred.shape[0], -1)
+    cls_feat = cls_feat.view(-1)
     
-    print(pred.shape, cls_feat.shape)
+    #print(pred.shape, cls_feat.shape)
 
     cls_mat = cls_feat.repeat(pred.shape[0],1)
 
@@ -215,16 +217,16 @@ def test(e, best_acc):
   class_template = te_loader.load_template(class_target)
   class_template = class_template.cuda(async=True)
   with torch.no_grad():
-    class_recon, class_z1, class_z2, _ = net(class_template)
+    class_recon, _, class_z, _ = net(class_template)
   
   for i, (input, target, template) in enumerate(testloader):
 
     target = torch.squeeze(target)
     input, template = input.cuda(async=True), template.cuda(async=True)
     with torch.no_grad():
-      recon, z1, z2, _  = net(input)
+      recon, _, z, _  = net(input)
     
-    sample_correct, sample_all, sample_rank = score_NN(z1, class_z1, target, n_classes)
+    sample_correct, sample_all, sample_rank = score_NN(z, class_z, target, n_classes)
     accum_class += sample_correct
     accum_all += sample_all
     rank_all = rank_all + sample_rank # [class_id, topN]
