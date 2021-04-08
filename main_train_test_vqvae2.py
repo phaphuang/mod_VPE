@@ -26,7 +26,7 @@ from augmentations import *
 parser = ArgumentParser(description='Variational Prototyping Encoder (VPE)')
 parser.add_argument('--seed',       type=int,   default=42,             help='Random seed')
 parser.add_argument('--arch',       type=str,   default='vqvae2',  help='network type: vaeIdsia, vaeIdsiaStn')
-parser.add_argument('--dataset',    type=str,   default='belga2flickr', help='dataset to use [gtsrb, gtsrb2TT100K, belga2flickr, belga2toplogo]')
+parser.add_argument('--dataset',    type=str,   default='belga2toplogo', help='dataset to use [gtsrb, gtsrb2TT100K, belga2flickr, belga2toplogo]')
 parser.add_argument('--exp',        type=str,   default='exp_list',     help='training scenario')
 parser.add_argument('--resume',     type=str,   default=None,           help='Resume training from previously saved model')
 
@@ -79,7 +79,7 @@ f_iou.close()
 
 # set up GPU
 # we could do os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1, 2"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+#os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Data
 data_loader = get_loader(args.dataset)
@@ -125,10 +125,10 @@ def train(e):
     target = torch.squeeze(target)
     input, template = input.cuda(async=True), template.cuda(async=True)
 
-    recon, d, _, _ = net(input)
+    recon, d, _, _, input_stn = net(input)
     
     # Calculate loss function
-    mse_loss = crit(recon, input)
+    mse_loss = crit(recon, template)
     loss = mse_loss + 0.25 * sum(d)
     
     print('Epoch:%d  Batch:%d/%d  Total Loss:%08f MSE loss:%08f  VQ loss:%08f'%(e, i, batch_iter, loss.data, mse_loss.data, sum(d).data))
@@ -148,7 +148,7 @@ def train(e):
         os.mkdir(out_root)
 
       torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      #torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
+      torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
       torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
       torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
 
@@ -160,7 +160,7 @@ def train(e):
     class_template = tr_loader.load_template(class_target)
     class_template = class_template.cuda(async=True)
     with torch.no_grad():
-      class_recon, _, _, _ = net(class_template)
+      class_recon, _, _, _, _ = net(class_template)
     
     torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)  
     torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2)
@@ -178,10 +178,13 @@ def score_NN(pred, class_feature, label, n_classes):
   for i in range(n_classes):
     cls_feat = class_feature[i,:]
     
-    pred = pred.view(pred.shape[0], -1)
-    cls_feat = cls_feat.view(-1)
-    
-    #print(pred.shape, cls_feat.shape)
+    #pred = pred.view(pred.shape[0], -1)
+    #cls_feat = cls_feat.view(-1)
+
+    cls_feat = torch.mean(cls_feat.view(cls_feat.size(0), -1), dim=1)
+    pred = torch.mean(pred.view(pred.size(0), pred.size(1), -1), dim=2)
+
+    #print(pred.size(), cls_feat.shape)
 
     cls_mat = cls_feat.repeat(pred.shape[0],1)
 
@@ -217,14 +220,14 @@ def test(e, best_acc):
   class_template = te_loader.load_template(class_target)
   class_template = class_template.cuda(async=True)
   with torch.no_grad():
-    class_recon, _, class_z, _ = net(class_template)
+    class_recon, _, class_z, _, _ = net(class_template)
   
   for i, (input, target, template) in enumerate(testloader):
 
     target = torch.squeeze(target)
     input, template = input.cuda(async=True), template.cuda(async=True)
     with torch.no_grad():
-      recon, _, z, _  = net(input)
+      recon, _, z, _, input_stn  = net(input)
     
     sample_correct, sample_all, sample_rank = score_NN(z, class_z, target, n_classes)
     accum_class += sample_correct
@@ -240,7 +243,7 @@ def test(e, best_acc):
         os.mkdir(out_root)
 
       torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      #torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
+      torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
       torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
       torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
 
