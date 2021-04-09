@@ -159,6 +159,70 @@ class Upscaler(HelperModule):
     def forward(self, x: torch.FloatTensor, stage: int) -> torch.FloatTensor:
         return self.stages[stage](x)
 
+class View(nn.Module):
+    def __init__(self):
+        super(View, self).__init__()
+   
+    def forward(self, x):
+        numel = x.numel() / x.shape[0]
+        return x.view(-1, int(numel)) 
+
+def convNoutput(convs, input_size): # predict output size after conv layers
+    input_size = int(input_size)
+    input_channels = convs[0][0].weight.shape[1] # input channel
+    output = torch.Tensor(1, input_channels, input_size, input_size)
+    with torch.no_grad():
+        for conv in convs:
+            output = conv(output)
+    return output.numel(), output.shape
+
+class stn(nn.Module):
+    def __init__(self, input_channels, input_size, params):
+        super(stn, self).__init__()
+
+        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.conv1 = nn.Sequential(
+                    nn.Conv2d(input_channels, params[0], kernel_size=5, stride=1, padding=2),
+                    nn.ReLU(True),
+                    nn.MaxPool2d(kernel_size=2, stride=2)
+                    )
+        self.conv2 = nn.Sequential(
+                    nn.Conv2d(params[0], params[1], kernel_size=5, stride=1, padding=2),
+                    nn.ReLU(True),
+                    nn.MaxPool2d(kernel_size=2, stride=2)
+                    )
+
+        out_numel, out_size = convNoutput([self.conv1, self.conv2], input_size/2)
+        # set fc layer based on predicted size
+        self.fc = nn.Sequential(
+                View(),
+                nn.Linear(out_numel, params[2]),
+                nn.ReLU()
+                )
+        self.classifier = classifier = nn.Sequential(
+                View(),
+                nn.Linear(params[2], 6) # affine transform has 6 parameters
+                )
+        # initialize stn parameters (affine transform)
+        self.classifier[1].weight.data.fill_(0)
+        self.classifier[1].bias.data = torch.FloatTensor([1, 0, 0, 0, 1, 0])
+
+    def localization_network(self, x):
+        x = self.maxpool(x)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.fc(x)
+        x = self.classifier(x)
+        return x
+
+
+    def forward(self, x):
+        theta = self.localization_network(x)
+        theta = theta.view(-1,2,3)
+        grid = F.affine_grid(theta, x.size())
+        x = F.grid_sample(x, grid)
+        return x
+
 """
     Main VQ-VAE-2 Module, capable of support arbitrary number of levels
 """
@@ -171,7 +235,9 @@ class VQVAE2(HelperModule):
             nb_levels                  = 3,
             embed_dim                 = 64,
             nb_entries                 = 512,
-            scaling_rates        = [8, 4, 2]
+            scaling_rates        = [8, 4, 2],
+            param1                  = None,
+            input_size              = 64,
         ):
         self.nb_levels = nb_levels
         assert len(scaling_rates) == nb_levels, "Number of scaling rates not equal to number of levels!"
@@ -196,37 +262,54 @@ class VQVAE2(HelperModule):
         for i in range(nb_levels - 1):
             self.upscalers.append(Upscaler(embed_dim, scaling_rates[1:len(scaling_rates) - i][::-1]))
 
-    def forward(self, x):
-        # TODO: Might be easier to replace these with dictionaries?
-        encoder_outputs = []
-        code_outputs = []
-        decoder_outputs = []
-        upscale_counts = []
-        diffs = []
+        self.param1 = param1
+        if self.param1 is not None:
+            self.stn1 = stn(3, input_size, self.param1)
 
-        for enc in self.encoders:
-            if len(encoder_outputs):
-                encoder_outputs.append(enc(encoder_outputs[-1]))
-            else:
-                encoder_outputs.append(enc(x))
+    def forward(self, x, encode_only=False):
+        if encode_only:
+            encoder_outputs = []
+            for enc in self.encoders:
+                if len(encoder_outputs):
+                    encoder_outputs.append(enc(encoder_outputs[-1]))
+                else:
+                    encoder_outputs.append(enc(x))
+            
+            return encoder_outputs
+        else:
+            # TODO: Might be easier to replace these with dictionaries?
+            encoder_outputs = []
+            code_outputs = []
+            decoder_outputs = []
+            upscale_counts = []
+            diffs = []
 
-        for l in range(self.nb_levels-1, -1, -1):
-            codebook, decoder = self.codebooks[l], self.decoders[l]
+            if self.param1 is not None:
+                x = self.stn1(x)
 
-            if len(decoder_outputs): # if we have previous levels to condition on
-                code_q, code_d, code_idx = codebook(torch.cat([encoder_outputs[l], decoder_outputs[-1]], axis=1))
-            else:
-                code_q, code_d, code_idx = codebook(encoder_outputs[l])
-            diffs.append(code_d)
+            for enc in self.encoders:
+                if len(encoder_outputs):
+                    encoder_outputs.append(enc(encoder_outputs[-1]))
+                else:
+                    encoder_outputs.append(enc(x))
 
-            code_outputs = [self.upscalers[i](c, upscale_counts[i]) for i, c in enumerate(code_outputs)]
-            upscale_counts = [u+1 for u in upscale_counts]
-            decoder_outputs.append(decoder(torch.cat([code_q, *code_outputs], axis=1)))
+            for l in range(self.nb_levels-1, -1, -1):
+                codebook, decoder = self.codebooks[l], self.decoders[l]
 
-            code_outputs.append(code_q)
-            upscale_counts.append(0)
+                if len(decoder_outputs): # if we have previous levels to condition on
+                    code_q, code_d, code_idx = codebook(torch.cat([encoder_outputs[l], decoder_outputs[-1]], axis=1))
+                else:
+                    code_q, code_d, code_idx = codebook(encoder_outputs[l])
+                diffs.append(code_d)
 
-        return decoder_outputs[-1], diffs, encoder_outputs[-1], decoder_outputs
+                code_outputs = [self.upscalers[i](c, upscale_counts[i]) for i, c in enumerate(code_outputs)]
+                upscale_counts = [u+1 for u in upscale_counts]
+                decoder_outputs.append(decoder(torch.cat([code_q, *code_outputs], axis=1)))
+
+                code_outputs.append(code_q)
+                upscale_counts.append(0)
+
+            return decoder_outputs[-1], diffs, encoder_outputs, decoder_outputs, x
 
 if __name__ == '__main__':
     from models.helper import get_parameter_count

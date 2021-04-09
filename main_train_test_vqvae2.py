@@ -229,7 +229,7 @@ def test(e, best_acc):
     with torch.no_grad():
       recon, _, z, _, input_stn  = net(input)
     
-    sample_correct, sample_all, sample_rank = score_NN(z, class_z, target, n_classes)
+    sample_correct, sample_all, sample_rank = score_NN(z[-1], class_z[-1], target, n_classes)
     accum_class += sample_correct
     accum_all += sample_all
     rank_all = rank_all + sample_rank # [class_id, topN]

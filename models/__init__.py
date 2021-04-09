@@ -21,7 +21,7 @@ def get_model(name, n_classes=None):
         model = model(d=128, k=512, num_channels=3)
     
     if name is 'vqvae2':
-        model = model(hidden_channels=64, embed_dim=32, nb_entries=256, nb_levels=2, scaling_rates=[4,2])
+        model = model(hidden_channels=64, embed_dim=32, nb_entries=256, nb_levels=2, scaling_rates=[4,2], param1=[200,300,200], input_size=64)
 
     return model
 
