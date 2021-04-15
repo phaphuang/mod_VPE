@@ -176,7 +176,7 @@ def score_NN(pred, class_feature, label, n_classes):
   for i in range(n_classes):
     cls_feat = class_feature[i,:]
     cls_mat = cls_feat.repeat(pred.shape[0],1)
-    print("Class Feature Shape: ", class_feature.shape, cls_feat.shape, pred.shape)
+    print("Class Feature Shape: ", cls_feat.shape, cls_mat.shape, pred.shape)
     # euclidean distance
     sample_distance[:,i] = torch.norm(pred - cls_mat,p=2, dim=1)
   

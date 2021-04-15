@@ -2,6 +2,7 @@ from models.vaeIdsiaStn import *
 from models.vqvae import VQVAEModel
 from models.vqcvae import VQ_CVAE
 from models.vqvae2 import VQVAE2
+from models.quartervqvae2 import QVQVAE, QuarterDecoder, QuarterEncoder
 
 def get_model(name, n_classes=None):
     model = _get_model_instance(name)
@@ -23,6 +24,9 @@ def get_model(name, n_classes=None):
     if name is 'vqvae2':
         model = model(hidden_channels=64, embed_dim=32, nb_entries=256, nb_levels=2, scaling_rates=[4,2], param1=[200,300,200], input_size=64)
 
+    if name is 'quartervqvae':
+        model = model([QuarterEncoder(3, out_channels=32, num_latents=128)], [QuarterDecoder(in_channels=32, out_channels=3)])
+
     return model
 
 def _get_model_instance(name):
@@ -33,6 +37,7 @@ def _get_model_instance(name):
             'vqvae' : VQVAEModel,
             'vqcvae' : VQ_CVAE,
             'vqvae2' : VQVAE2,
+            'quartervqvae' : QVQVAE,
         }[name]
     except:
         print('Model {} not available'.format(name))
