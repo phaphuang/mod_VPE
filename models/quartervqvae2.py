@@ -152,7 +152,6 @@ class QVQVAE(nn.Module):
         all_encoded = [inputs]
         all_vq_outs = []
         total_vq_loss = 0.0
-        total_recon_loss = 0.0
         for encoder in self.encoders:
             encoded = encoder.encode(all_encoded[-1])
             embedded, embedded_pt, _ = encoder.vq(encoded)

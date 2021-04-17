@@ -32,7 +32,7 @@ parser.add_argument('--resume',     type=str,   default=None,           help='Re
 
 parser.add_argument('--epochs',     type=int,   default=2000,           help='Training epochs')
 parser.add_argument('--lr',         type=float, default=1e-4,           help='Learning rate')
-parser.add_argument('--batch_size', type=int,   default=128,            help='Batch size')
+parser.add_argument('--batch_size', type=int,   default=64,            help='Batch size')
 
 parser.add_argument('--img_cols',   type=int,   default=64,             help='resized image width')
 parser.add_argument('--img_rows',   type=int,   default=64,             help='resized image height')
@@ -128,7 +128,7 @@ def train(e):
 
     optimizer.zero_grad()
     target = torch.squeeze(target)
-    input, template = input.cuda(async=True), template.cuda(async=True)
+    input, template = input.cuda(), template.cuda()
 
     terms = net(input)
 

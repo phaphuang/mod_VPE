@@ -26,13 +26,13 @@ from augmentations import *
 parser = ArgumentParser(description='Variational Prototyping Encoder (VPE)')
 parser.add_argument('--seed',       type=int,   default=42,             help='Random seed')
 parser.add_argument('--arch',       type=str,   default='vqvae2',  help='network type: vaeIdsia, vaeIdsiaStn')
-parser.add_argument('--dataset',    type=str,   default='belga2toplogo', help='dataset to use [gtsrb, gtsrb2TT100K, belga2flickr, belga2toplogo]')
+parser.add_argument('--dataset',    type=str,   default='gtsrb2TT100K', help='dataset to use [gtsrb, gtsrb2TT100K, belga2flickr, belga2toplogo]')
 parser.add_argument('--exp',        type=str,   default='exp_list',     help='training scenario')
 parser.add_argument('--resume',     type=str,   default=None,           help='Resume training from previously saved model')
 
 parser.add_argument('--epochs',     type=int,   default=2000,           help='Training epochs')
 parser.add_argument('--lr',         type=float, default=1e-4,           help='Learning rate')
-parser.add_argument('--batch_size', type=int,   default=16,            help='Batch size')
+parser.add_argument('--batch_size', type=int,   default=64,            help='Batch size')
 
 parser.add_argument('--img_cols',   type=int,   default=64,             help='resized image width')
 parser.add_argument('--img_rows',   type=int,   default=64,             help='resized image height')
@@ -162,10 +162,10 @@ def train(e):
       if not out_root.is_dir():
         os.mkdir(out_root)
 
-      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2)
       torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
       torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2)
 
     # if (i > 0) and (i % 10 == 0):
     #     break
@@ -257,13 +257,13 @@ def test(e, best_acc):
       if not out_root.is_dir():
         os.mkdir(out_root)
 
-      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2)
       torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
       torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2)
 
   if e%save_epoch == 0:
-    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
+    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)  
     torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
 
   acc_all = accum_class.sum() / accum_all.sum() 
