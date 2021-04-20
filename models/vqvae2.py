@@ -266,50 +266,40 @@ class VQVAE2(HelperModule):
         if self.param1 is not None:
             self.stn1 = stn(3, input_size, self.param1)
 
-    def forward(self, x, encode_only=False):
-        if encode_only:
-            encoder_outputs = []
-            for enc in self.encoders:
-                if len(encoder_outputs):
-                    encoder_outputs.append(enc(encoder_outputs[-1]))
-                else:
-                    encoder_outputs.append(enc(x))
-            
-            return encoder_outputs
-        else:
-            # TODO: Might be easier to replace these with dictionaries?
-            encoder_outputs = []
-            code_outputs = []
-            decoder_outputs = []
-            upscale_counts = []
-            diffs = []
+    def forward(self, x):
+        # TODO: Might be easier to replace these with dictionaries?
+        encoder_outputs = []
+        code_outputs = []
+        decoder_outputs = []
+        upscale_counts = []
+        diffs = []
 
-            if self.param1 is not None:
-                x = self.stn1(x)
+        if self.param1 is not None:
+            x = self.stn1(x)
 
-            for enc in self.encoders:
-                if len(encoder_outputs):
-                    encoder_outputs.append(enc(encoder_outputs[-1]))
-                else:
-                    encoder_outputs.append(enc(x))
+        for enc in self.encoders:
+            if len(encoder_outputs):
+                encoder_outputs.append(enc(encoder_outputs[-1]))
+            else:
+                encoder_outputs.append(enc(x))
 
-            for l in range(self.nb_levels-1, -1, -1):
-                codebook, decoder = self.codebooks[l], self.decoders[l]
+        for l in range(self.nb_levels-1, -1, -1):
+            codebook, decoder = self.codebooks[l], self.decoders[l]
 
-                if len(decoder_outputs): # if we have previous levels to condition on
-                    code_q, code_d, code_idx = codebook(torch.cat([encoder_outputs[l], decoder_outputs[-1]], axis=1))
-                else:
-                    code_q, code_d, code_idx = codebook(encoder_outputs[l])
-                diffs.append(code_d)
+            if len(decoder_outputs): # if we have previous levels to condition on
+                code_q, code_d, code_idx = codebook(torch.cat([encoder_outputs[l], decoder_outputs[-1]], axis=1))
+            else:
+                code_q, code_d, code_idx = codebook(encoder_outputs[l])
+            diffs.append(code_d)
 
-                code_outputs = [self.upscalers[i](c, upscale_counts[i]) for i, c in enumerate(code_outputs)]
-                upscale_counts = [u+1 for u in upscale_counts]
-                decoder_outputs.append(decoder(torch.cat([code_q, *code_outputs], axis=1)))
+            code_outputs = [self.upscalers[i](c, upscale_counts[i]) for i, c in enumerate(code_outputs)]
+            upscale_counts = [u+1 for u in upscale_counts]
+            decoder_outputs.append(decoder(torch.cat([code_q, *code_outputs], axis=1)))
 
-                code_outputs.append(code_q)
-                upscale_counts.append(0)
+            code_outputs.append(code_q)
+            upscale_counts.append(0)
 
-            return decoder_outputs[-1], diffs, encoder_outputs, decoder_outputs, x
+        return decoder_outputs[-1], diffs, encoder_outputs, decoder_outputs, x
 
 if __name__ == '__main__':
     from models.helper import get_parameter_count
@@ -320,9 +310,11 @@ if __name__ == '__main__':
     print(f"Number of trainable parameters: {get_parameter_count(net)}")
 
     x = torch.randn(1, 3, 64, 64).to(device)
-    _, diffs, enc_out, dec_out = net(x)
+    _, diffs, enc_out, dec_out, stn = net(x)
+    print("Encoder Out: ")
     print('\n'.join(str(y.shape) for y in enc_out))
     print()
+    print("Decoder Out:")
     print('\n'.join(str(y.shape) for y in dec_out))
     print()
     print('\n'.join(str(y) for y in diffs))

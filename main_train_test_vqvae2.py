@@ -31,7 +31,7 @@ parser.add_argument('--exp',        type=str,   default='exp_list',     help='tr
 parser.add_argument('--resume',     type=str,   default=None,           help='Resume training from previously saved model')
 
 parser.add_argument('--epochs',     type=int,   default=2000,           help='Training epochs')
-parser.add_argument('--lr',         type=float, default=1e-4,           help='Learning rate')
+parser.add_argument('--lr',         type=float, default=1e-3,           help='Learning rate')
 parser.add_argument('--batch_size', type=int,   default=64,            help='Batch size')
 
 parser.add_argument('--img_cols',   type=int,   default=64,             help='resized image width')

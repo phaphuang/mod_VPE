@@ -3,6 +3,7 @@ from models.vqvae import VQVAEModel
 from models.vqcvae import VQ_CVAE
 from models.vqvae2 import VQVAE2
 from models.quartervqvae2 import QVQVAE, QuarterDecoder, QuarterEncoder
+from models.vqvae2_base import VQVAE2Base
 
 def get_model(name, n_classes=None):
     model = _get_model_instance(name)
@@ -22,11 +23,17 @@ def get_model(name, n_classes=None):
         model = model(d=128, k=512, num_channels=3)
     
     if name is 'vqvae2':
-        model = model(hidden_channels=64, embed_dim=32, nb_entries=256, nb_levels=2, scaling_rates=[4,2], param1=[200,300,200], input_size=64)
+        #model = model(hidden_channels=64, embed_dim=32, nb_entries=256, nb_levels=3, scaling_rates=[8,4,2], param1=[200,300,200], input_size=64)
+        nb_levels = 6 
+        model = model(nb_levels=nb_levels, scaling_rates=[2]*nb_levels, param1=[200,300,200], input_size=64)
 
     if name is 'quartervqvae':
-        model = model([QuarterEncoder(3, out_channels=32, num_latents=128)], [QuarterDecoder(in_channels=32, out_channels=3)])
-
+        model = model(
+        [QuarterEncoder(3, out_channels=32, num_latents=128)]
+        , [QuarterDecoder(in_channels=32, out_channels=3)])
+    
+    if name is 'vqvae2Base':
+        model = model()
     return model
 
 def _get_model_instance(name):
@@ -38,6 +45,7 @@ def _get_model_instance(name):
             'vqcvae' : VQ_CVAE,
             'vqvae2' : VQVAE2,
             'quartervqvae' : QVQVAE,
+            'vqvae2Base': VQVAE2Base,
         }[name]
     except:
         print('Model {} not available'.format(name))

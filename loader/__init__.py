@@ -5,12 +5,20 @@ from loader.gtsrb2TT100K import gtsrb2TT100KLoader
 from loader.belga2flickr import belga2flickrLoader
 from loader.belga2toplogo import belga2toplogoLoader
 
+from loader.gtsrb2TT100KNorm import gtsrb2TT100KLoaderNorm
+
 def get_loader(name):
     return {
         'gtsrb': gtsrbLoader,
         'gtsrb2TT100K': gtsrb2TT100KLoader,
         'belga2flickr': belga2flickrLoader,
         'belga2toplogo': belga2toplogoLoader,
+    }[name]
+
+def get_loader_norm(name):
+    return {
+        'gtsrb': gtsrbLoader,
+        'gtsrb2TT100K': gtsrb2TT100KLoaderNorm,
     }[name]
 
 

@@ -16,16 +16,16 @@ from torch.utils.data import DataLoader
 import torchvision
 from torchvision import datasets, transforms
 
-from loader import get_loader, get_data_path
+from loader import get_loader_norm, get_data_path
 from models import get_model
 from augmentations import *
 
-#device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Setup
 parser = ArgumentParser(description='Variational Prototyping Encoder (VPE)')
 parser.add_argument('--seed',       type=int,   default=42,             help='Random seed')
-parser.add_argument('--arch',       type=str,   default='vqvae2Latent',  help='network type: vaeIdsia, vaeIdsiaStn')
+parser.add_argument('--arch',       type=str,   default='vqvae2Base',  help='network type: vaeIdsia, vaeIdsiaStn')
 parser.add_argument('--dataset',    type=str,   default='gtsrb2TT100K', help='dataset to use [gtsrb, gtsrb2TT100K, belga2flickr, belga2toplogo]')
 parser.add_argument('--exp',        type=str,   default='exp_list',     help='training scenario')
 parser.add_argument('--resume',     type=str,   default=None,           help='Resume training from previously saved model')
@@ -77,12 +77,8 @@ f_iou.close()
 f_iou = open(os.path.join(result_path, "log_val_acc.txt"),'w')
 f_iou.close()
 
-# set up GPU
-# we could do os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1, 2"
-#os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
 # Data
-data_loader = get_loader(args.dataset)
+data_loader = get_loader_norm(args.dataset)
 data_path = get_data_path(args.dataset)
 
 tr_loader = data_loader(data_path, args.exp, is_transform=True, split='train', img_size=(args.img_rows, args.img_cols), augmentations=data_aug_tr)
@@ -93,7 +89,7 @@ testloader = DataLoader(te_loader, batch_size=args.batch_size, num_workers=args.
 
 # define model or load model
 net = get_model(args.arch, n_classes=None)
-net.cuda()
+net.to(device)
 
 if args.resume is not None:
   pre_params = torch.load(args.resume)
@@ -107,9 +103,10 @@ num_test = len(te_loader.targets)
 batch_iter = math.ceil(num_train/args.batch_size)
 batch_iter_test = math.ceil(num_test/args.batch_size)
 
-#crit = torch.nn.MSELoss()
-crit = torch.nn.L1Loss()
-crit_mse = torch.nn.MSELoss()
+#criterion = nn.BCELoss()
+#criterion.reduction = 'mean'
+criterion = nn.MSELoss()
+latent_loss_weight = 0.25
 
 def train(e):
   n_classes = tr_loader.n_classes
@@ -125,31 +122,17 @@ def train(e):
 
     optimizer.zero_grad()
     target = torch.squeeze(target)
-    input, template = input.cuda(async=True), template.cuda(async=True)
+    input, template = input.to(device), template.to(device)
 
-    recon, d, src_encoded, decoder_outputs, input_stn = net(input)
-
-    # Calculate loss function
-    #mse_loss = crit(recon, template)
-    #loss = mse_loss + 0.25 * sum(d)
-
-    l1_loss = crit(recon, template)
-    loss = l1_loss + 0.25 * sum(d)
-
-    target_encoded = net(template, encode_only=True)
-
-    mse_loss = 0
-
-    for src, tar in zip(src_encoded, target_encoded):
-      mse_loss += crit_mse(src, tar)
-
-    loss += mse_loss
-
+    recon, latent_loss, input_stn, _ = net(input)
+    recon_loss = criterion(recon, template)
+    latent_loss = latent_loss.mean()
+    loss = recon_loss + latent_loss_weight * latent_loss
     
-    print('Epoch:%d  Batch:%d/%d  Total Loss:%08f L1 loss:%08f  VQ loss:%08f Latent loss:%08f'%(e, i, batch_iter, loss.data, l1_loss.data, sum(d).data, mse_loss.data))
+    print('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  VQ loss:%08f'%(e, i, batch_iter, loss.data, recon_loss.data, latent_loss.data))
    
     f_loss = open(os.path.join(result_path, "log_loss.txt"),'a')
-    f_loss.write('Epoch:%d  Batch:%d/%d  Total Loss:%08f L1 loss:%08f  VQ loss:%08f'%(e, i, batch_iter, loss.data, l1_loss.data, sum(d).data))
+    f_loss.write('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  VQ loss:%08f'%(e, i, batch_iter, loss.data, recon_loss.data, latent_loss.data))
     f_loss.close()
     
     loss.backward()
@@ -162,10 +145,10 @@ def train(e):
       if not out_root.is_dir():
         os.mkdir(out_root)
 
-      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2)
-      torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
+      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2, normalize=True) 
       torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2)
+      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
 
     # if (i > 0) and (i % 10 == 0):
     #     break
@@ -173,12 +156,12 @@ def train(e):
   if e%save_epoch == 0:
     class_target = torch.LongTensor(list(range(n_classes)))
     class_template = tr_loader.load_template(class_target)
-    class_template = class_template.cuda(async=True)
+    class_template = class_template.to(device)
     with torch.no_grad():
-      class_recon, _, _, _, _ = net(class_template)
+      class_recon, _, _, _ = net(class_template)
     
-    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)  
-    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2)
+    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
+    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)
   
 def score_NN(pred, class_feature, label, n_classes):
 
@@ -235,16 +218,16 @@ def test(e, best_acc):
   class_template = te_loader.load_template(class_target)
   class_template = class_template.cuda(async=True)
   with torch.no_grad():
-    class_recon, _, class_z, _, _ = net(class_template)
+    class_recon, _, _, class_z  = net(class_template)
   
   for i, (input, target, template) in enumerate(testloader):
 
     target = torch.squeeze(target)
     input, template = input.cuda(async=True), template.cuda(async=True)
     with torch.no_grad():
-      recon, _, z, _, input_stn  = net(input)
+      recon, _, input_stn, z  = net(input)
     
-    sample_correct, sample_all, sample_rank = score_NN(z[-1], class_z[-1], target, n_classes)
+    sample_correct, sample_all, sample_rank = score_NN(z, class_z, target, n_classes)
     accum_class += sample_correct
     accum_all += sample_all
     rank_all = rank_all + sample_rank # [class_id, topN]
@@ -257,13 +240,13 @@ def test(e, best_acc):
       if not out_root.is_dir():
         os.mkdir(out_root)
 
-      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2)
-      torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
+      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2, normalize=True) 
       torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2)
+      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
 
   if e%save_epoch == 0:
-    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)  
+    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
     torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
 
   acc_all = accum_class.sum() / accum_all.sum() 
@@ -329,10 +312,10 @@ def test(e, best_acc):
       f_rank.write('rank cls %d: %.4f\n'%(i+1, rank_acc))
     f_rank.close()
     
-  # Save weights and scores
-  # if e % 100 == 0:
-  #   pass
-    # torch.save(net.state_dict(), os.path.join('flickr2belga_latest_net.pth'))
+  #### Save weights and scores
+  if e % 100 == 0:
+    pass
+    torch.save(net.state_dict(), os.path.join('{}_latest_net_ep{}.pth'.format(args.dataset, e)))
 
   ############# Plot scores
   mean_scores.append(acc_tecls.mean())
@@ -342,15 +325,6 @@ def test(e, best_acc):
   plt.ylabel('Unseen mean IoU')
   plt.savefig(os.path.join(result_path, 'unseen_ious.png'))
   plt.close()
-
-  ############# plot rank
-  # mean_rank.append(rank_all.mean())
-  # rank_es = list(range(len(mean_rank)))
-  # plt.plot(rank_es, mean_rank, 'b-')
-  # plt.xlabel('Epoch')
-  # plt.ylabel('Mean rank')
-  # plt.savefig(os.path.join(result_path, 'rank.png'))
-  # plt.close()
 
   return best_acc
 
