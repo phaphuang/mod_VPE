@@ -115,6 +115,9 @@ d_optim = optim.Adam(disc.parameters(), lr=args.lr)
 criterion = nn.MSELoss()
 latent_loss_weight = 0.25
 
+scheduler_vae = optim.lr_scheduler.StepLR(optimizer, 10, 0.5,)
+scheduler_d = optim.lr_scheduler.StepLR(d_optim, 10, 0.5,)
+
 def toogle_grad(model, requires_grad):
     for p in model.parameters():
         p.requires_grad_(requires_grad)
@@ -166,6 +169,9 @@ def train(e):
     f_loss = open(os.path.join(result_path, "log_loss.txt"),'a')
     f_loss.write('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  VQ loss:%08f Disc Loss: %08f'%(e, i, batch_iter, loss.data, recon_loss.data, latent_loss.data, d_loss.data))
     f_loss.close()
+
+    scheduler_vae.step()
+    scheduler_d.step()
 
     if i < 1 and (e%save_epoch == 0):
     #if (e%save_epoch == 0):
