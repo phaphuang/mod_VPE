@@ -16,9 +16,16 @@ from torch.utils.data import DataLoader
 import torchvision
 from torchvision import datasets, transforms
 
-from loader import get_loader_norm, get_data_path
+from loader import get_loader, get_data_path
 from models import get_model
 from augmentations import *
+
+import random
+
+SEED = 1
+torch.manual_seed(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -44,7 +51,7 @@ random.seed(args.seed)
 torch.manual_seed(args.seed)
 plt.switch_backend('agg')  # Allow plotting when running remotely
 
-save_epoch = 50 # save log images per save_epoch
+save_epoch = 5 # save log images per save_epoch
 
 # 02 rotation + flip augmentation option
 # Setup Augmentations
@@ -78,7 +85,7 @@ f_iou = open(os.path.join(result_path, "log_val_acc.txt"),'w')
 f_iou.close()
 
 # Data
-data_loader = get_loader_norm(args.dataset)
+data_loader = get_loader(args.dataset)
 data_path = get_data_path(args.dataset)
 
 tr_loader = data_loader(data_path, args.exp, is_transform=True, split='train', img_size=(args.img_rows, args.img_cols), augmentations=data_aug_tr)
@@ -145,10 +152,10 @@ def train(e):
       if not out_root.is_dir():
         os.mkdir(out_root)
 
-      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2, normalize=True) 
-      torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2)
+      #torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
+      torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2)
+      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2)
 
     # if (i > 0) and (i % 10 == 0):
     #     break
@@ -160,8 +167,8 @@ def train(e):
     with torch.no_grad():
       class_recon, _, _, _ = net(class_template)
     
-    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
-    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)
+    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)  
+    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2)
   
 def score_NN(pred, class_feature, label, n_classes):
 
@@ -240,14 +247,14 @@ def test(e, best_acc):
       if not out_root.is_dir():
         os.mkdir(out_root)
 
-      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2, normalize=True) 
-      torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
-      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2, normalize=True)
+      torchvision.utils.save_image(input.data, '{}/batch_{}_data.jpg'.format(out_folder,i), nrow=8, padding=2)
+      #torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2) 
+      torchvision.utils.save_image(recon.data, '{}/batch_{}_recon.jpg'.format(out_folder,i), nrow=8, padding=2)
+      torchvision.utils.save_image(template.data, '{}/batch_{}_target.jpg'.format(out_folder,i), nrow=8, padding=2)
 
   if e%save_epoch == 0:
-    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
-    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2, normalize=True)  
+    torchvision.utils.save_image(class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)  
+    torchvision.utils.save_image(class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2)  
 
   acc_all = accum_class.sum() / accum_all.sum() 
   acc_cls = torch.div(accum_class, accum_all)

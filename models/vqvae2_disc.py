@@ -226,7 +226,7 @@ class Decoder(nn.Module):
         return self.blocks(input)
 
 
-class VQVAE2Base(nn.Module):
+class VQVAE2Disc(nn.Module):
     def __init__(
         self,
         in_channel=3,

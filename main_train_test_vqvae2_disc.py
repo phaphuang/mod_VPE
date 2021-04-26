@@ -27,7 +27,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # Setup
 parser = ArgumentParser(description='Variational Prototyping Encoder (VPE)')
 parser.add_argument('--seed',       type=int,   default=42,             help='Random seed')
-parser.add_argument('--arch',       type=str,   default='vqvae2Base',  help='network type: vaeIdsia, vaeIdsiaStn')
+parser.add_argument('--arch',       type=str,   default='vqvae2Disc',  help='network type: vaeIdsia, vaeIdsiaStn')
 parser.add_argument('--dataset',    type=str,   default='gtsrb2TT100K', help='dataset to use [gtsrb, gtsrb2TT100K, belga2flickr, belga2toplogo]')
 parser.add_argument('--exp',        type=str,   default='exp_list',     help='training scenario')
 parser.add_argument('--resume',     type=str,   default=None,           help='Resume training from previously saved model')
@@ -108,15 +108,13 @@ batch_iter_test = math.ceil(num_test/args.batch_size)
 disc = Discriminator()
 disc.to(device)
 
-d_optim = optim.Adam(disc.parameters(), lr=args.lr)
+d_optimizer = optim.Adam(disc.parameters(), lr=args.lr)
 
 #criterion = nn.BCELoss()
 #criterion.reduction = 'mean'
 criterion = nn.MSELoss()
+criterion_quan = nn.L1Loss()
 latent_loss_weight = 0.25
-
-scheduler_vae = optim.lr_scheduler.StepLR(optimizer, 10, 0.5,)
-scheduler_d = optim.lr_scheduler.StepLR(d_optim, 10, 0.5,)
 
 def toogle_grad(model, requires_grad):
     for p in model.parameters():
@@ -147,7 +145,17 @@ def train(e):
     recon, latent_loss, _, _ = net(input)
     recon_loss = criterion(recon, template)
     latent_loss = latent_loss.mean()
+    #### Original VQ-VAE loss ####
     loss = recon_loss + latent_loss_weight * latent_loss
+
+    #### Modify VQ-VAE loss ####
+    template_quant_t, template_quant_b, _, _, _, _ = net.encode(template)
+    out_quant_t, out_quant_b, _, _, _, _ = net.encode(recon)
+
+    loss_t = criterion_quan(template_quant_t, out_quant_t)
+    loss_b = criterion_quan(template_quant_b, out_quant_b)
+
+    loss += loss_t + loss_b
 
     loss.backward()
     optimizer.step()
@@ -155,23 +163,26 @@ def train(e):
     #### Training Discriminator ###
     #toogle_grad(disc, True)
     #toogle_grad(net, False)
-    d_optim.zero_grad()
+    d_optimizer.zero_grad()
     
     d_real = disc(input)
     d_fake = disc(template)
     d_loss = F.softplus(d_fake).mean() + F.softplus(-d_real).mean()
 
     d_loss.backward()
-    d_optim.step()
+    d_optimizer.step()
 
-    print('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  VQ loss:%08f Disc Loss: %08f'%(e, i, batch_iter, loss.data, recon_loss.data, latent_loss.data, d_loss.data))
+    print('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  T loss:%08f B loss::%08f VQ loss:%08f Disc Loss: %08f'%(e, i, batch_iter, loss.data, recon_loss.data, loss_t.data, loss_b.data, latent_loss.data, d_loss.data))
    
     f_loss = open(os.path.join(result_path, "log_loss.txt"),'a')
-    f_loss.write('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  VQ loss:%08f Disc Loss: %08f'%(e, i, batch_iter, loss.data, recon_loss.data, latent_loss.data, d_loss.data))
+    f_loss.write('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  T loss:%08f B loss::%08f VQ loss:%08f Disc Loss: %08f'%(e, i, batch_iter, loss.data, recon_loss.data, loss_t.data, loss_b.data, latent_loss.data, d_loss.data))
     f_loss.close()
 
-    scheduler_vae.step()
-    scheduler_d.step()
+    for param_group in optimizer.param_groups:
+      print("Current learning rate is: {}".format(param_group['lr']))
+    
+    for param_group in d_optimizer.param_groups:
+      print("Current d learning rate is: {}".format(param_group['lr']))
 
     if i < 1 and (e%save_epoch == 0):
     #if (e%save_epoch == 0):
