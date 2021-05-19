@@ -97,12 +97,13 @@ class gtsrb2TT100KLoaderNorm(Dataset):
       img = m.imresize(img, (self.img_size[0], self.img_size[1]))
     # Resize scales images from 0 to 255, thus we need
     # to divide by 255.0
-    img = img.astype(float) / 255.0
+    #img = img.astype(float) / 255.0
     # NHWC -> NCHW
     img = img.transpose(2, 0, 1)
     img = torch.from_numpy(img).float()
 
-    img = (img * 2) - 1
+    #img = (img * 2) - 1
+    img = img / 127.5 - 1 # -1 ~ 1
     
     return img
 

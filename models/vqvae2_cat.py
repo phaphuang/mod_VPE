@@ -244,7 +244,7 @@ class Decoder(nn.Module):
         return self.blocks(input)
 
 
-class VQVAE2Base(nn.Module):
+class VQVAE2Cat(nn.Module):
     def __init__(
         self,
         in_channel=3,
@@ -271,6 +271,9 @@ class VQVAE2Base(nn.Module):
         self.upsample_t = nn.ConvTranspose2d(
             embed_dim, embed_dim, 4, stride=2, padding=1
         )
+        self.upsample_t2 = nn.ConvTranspose2d(
+            embed_dim * 2, embed_dim, 4, stride=2, padding=1
+        )
         self.dec = Decoder(
             embed_dim + embed_dim,
             in_channel,
@@ -280,15 +283,34 @@ class VQVAE2Base(nn.Module):
             stride=4,
         )
 
-        self.param1 = param1
-        if self.param1 is not None:
-            self.stn1 = stn(3, input_size, self.param1)
+        self.dec2 = Decoder(
+            embed_dim + embed_dim * 2,
+            in_channel,
+            channel,
+            n_res_block,
+            n_res_channel,
+            stride=4,
+        )
 
-    def forward(self, input):
-        if self.param1 is not None:
-            input = self.stn1(input)
-        quant_t, quant_b, diff, _, _, enc_t = self.encode(input)
-        dec = self.decode(quant_t, quant_b)
+    def forward(self, input, template=None):
+
+        if template is None:
+            quant_t, quant_b, diff, _, _, enc_t = self.encode(input)
+
+            dec = self.decode(quant_t, quant_b)
+        else:
+            quant_t1, quant_b1, diff1, _, _, enc_t1 = self.encode(input)
+            quant_t2, quant_b2, diff2, _, _, enc_t2 = self.encode(template)
+
+            #print(quant_t1.shape, quant_b1.shape, diff1.shape, enc_t1.shape)
+
+            quant_t = torch.cat([quant_t1, quant_t2], dim=1)
+            quant_b = torch.cat([quant_b1, quant_b2], dim=1)
+
+            enc_t = torch.cat([enc_t1, enc_t2], dim=1)
+            diff = torch.cat([diff1, diff2], dim=0)
+
+            dec = self.decode(quant_t, quant_b, template)
 
         return dec, diff, input, enc_t
 
@@ -311,10 +333,15 @@ class VQVAE2Base(nn.Module):
 
         return quant_t, quant_b, diff_t + diff_b, id_t, id_b, enc_t
 
-    def decode(self, quant_t, quant_b):
-        upsample_t = self.upsample_t(quant_t)
-        quant = torch.cat([upsample_t, quant_b], 1)
-        dec = self.dec(quant)
+    def decode(self, quant_t, quant_b, template=None):
+        if template is None:
+            upsample_t = self.upsample_t(quant_t)
+            quant = torch.cat([upsample_t, quant_b], 1)
+            dec = self.dec(quant)
+        else:
+            upsample_t = self.upsample_t2(quant_t)
+            quant = torch.cat([upsample_t, quant_b], 1)
+            dec = self.dec2(quant)
 
         return dec
 

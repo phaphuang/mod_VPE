@@ -20,7 +20,7 @@ from loader import get_loader_norm, get_data_path
 from models import get_model
 from augmentations import *
 
-from models.vqvae2_disc import Discriminator
+from models.vqvae2_disc import define_D, GANLoss
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -44,6 +44,7 @@ args = parser.parse_args()
 
 random.seed(args.seed)
 torch.manual_seed(args.seed)
+np.random.seed(args.seed)
 plt.switch_backend('agg')  # Allow plotting when running remotely
 
 save_epoch = 50 # save log images per save_epoch
@@ -56,7 +57,8 @@ data_aug_tr= Compose([Scale(args.img_cols), # resize longer side of an image to 
                       RandomRotate(180)])  # ramdom rotation
 
 data_aug_te= Compose([Scale(args.img_cols), 
-                     CenterPadding([args.img_rows, args.img_cols])])
+                     CenterPadding([args.img_rows, args.img_cols]),
+                     CenterCrop([args.img_rows, args.img_cols])])
 
 result_path = 'results_' + args.dataset
 if not os.path.exists(result_path):
@@ -105,15 +107,17 @@ num_test = len(te_loader.targets)
 batch_iter = math.ceil(num_train/args.batch_size)
 batch_iter_test = math.ceil(num_test/args.batch_size)
 
-disc = Discriminator()
-disc.to(device)
+# input_ch = 3, output_ch = 3
+net_d = define_D(3+3, ndf=64, netD='basic')
+net_d.to(device)
 
-d_optimizer = optim.Adam(disc.parameters(), lr=args.lr)
+d_optimizer = optim.Adam(net_d.parameters(), lr=args.lr)
 
 #criterion = nn.BCELoss()
 #criterion.reduction = 'mean'
 criterion = nn.MSELoss()
-criterion_quan = nn.L1Loss()
+criterionGAN = GANLoss().to(device)
+
 latent_loss_weight = 0.25
 
 def toogle_grad(model, requires_grad):
@@ -124,6 +128,10 @@ def compute_loss(d_out, target):
     targets = d_out.new_full(size=d_out.size(), fill_value=target)
     loss = F.binary_cross_entropy_with_logits(d_out, targets)
     return loss
+  
+real_label = torch.tensor(1.0).to(device)
+fake_label = torch.tensor(0.0).to(device)
+
 
 def train(e):
   n_classes = tr_loader.n_classes
@@ -131,7 +139,7 @@ def train(e):
 
   print('start train epoch: %d'%e)
   net.train()
-  disc.train()
+  net_d.train()
   
   for i, (input, target, template) in enumerate(trainloader):
 
@@ -147,35 +155,33 @@ def train(e):
     latent_loss = latent_loss.mean()
     #### Original VQ-VAE loss ####
     loss = recon_loss + latent_loss_weight * latent_loss
-
-    #### Modify VQ-VAE loss ####
-    template_quant_t, template_quant_b, _, _, _, _ = net.encode(template)
-    out_quant_t, out_quant_b, _, _, _, _ = net.encode(recon)
-
-    loss_t = criterion_quan(template_quant_t, out_quant_t)
-    loss_b = criterion_quan(template_quant_b, out_quant_b)
-
-    loss += loss_t + loss_b
-
     loss.backward()
     optimizer.step()
 
-    #### Training Discriminator ###
-    #toogle_grad(disc, True)
-    #toogle_grad(net, False)
+    #### Discriminator Loss ####
     d_optimizer.zero_grad()
-    
-    d_real = disc(input)
-    d_fake = disc(template)
-    d_loss = F.softplus(d_fake).mean() + F.softplus(-d_real).mean()
+
+    # Train with fake
+    fake_ab = torch.cat([input, recon], 1)
+    pred_fake = net_d.forward(fake_ab.detach())
+    loss_d_fake = criterionGAN(pred_fake, False)
+
+    # Train with real
+    real_ab = torch.cat([input, template], 1)
+    pred_real = net_d.forward(real_ab.detach())
+    loss_d_real = criterionGAN(pred_real, True)
+
+    # Combined D loss
+    d_loss = (loss_d_fake + loss_d_real) * 0.5
 
     d_loss.backward()
+
     d_optimizer.step()
 
-    print('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  T loss:%08f B loss::%08f VQ loss:%08f Disc Loss: %08f'%(e, i, batch_iter, loss.data, recon_loss.data, loss_t.data, loss_b.data, latent_loss.data, d_loss.data))
+    print('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f VQ loss:%08f Disc Loss: %08f'%(e, i, batch_iter, loss.data, recon_loss.data, latent_loss.data, d_loss.data))
    
     f_loss = open(os.path.join(result_path, "log_loss.txt"),'a')
-    f_loss.write('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  T loss:%08f B loss::%08f VQ loss:%08f Disc Loss: %08f'%(e, i, batch_iter, loss.data, recon_loss.data, loss_t.data, loss_b.data, latent_loss.data, d_loss.data))
+    f_loss.write('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f VQ loss:%08f Disc Loss: %08f'%(e, i, batch_iter, loss.data, recon_loss.data, latent_loss.data, d_loss.data))
     f_loss.close()
 
     for param_group in optimizer.param_groups:
@@ -219,20 +225,15 @@ def score_NN(pred, class_feature, label, n_classes):
   pred = pred.data.cpu() # batch x latent size
   class_feature = class_feature.data.cpu() # n_classes x latent size
   label = label.numpy()
+
+  pred = pred.view(pred.shape[0], -1)
+
   for i in range(n_classes):
     cls_feat = class_feature[i,:]
-    
-    #pred = pred.view(pred.shape[0], -1)
-    #cls_feat = cls_feat.view(-1)
 
-    cls_feat = torch.mean(cls_feat.view(cls_feat.size(0), -1), dim=1)
-    pred = torch.mean(pred.view(pred.size(0), pred.size(1), -1), dim=2)
-
-    #print(pred.size(), cls_feat.shape)
-
+    cls_feat = cls_feat.view(-1)
     cls_mat = cls_feat.repeat(pred.shape[0],1)
 
-    #print("Class Feature Shape: ", class_feature.shape, cls_feat.shape, pred.shape) # torch.Size([36, 128, 16, 16]) torch.Size([32768]) torch.Size([64, 32768])
     # euclidean distance
     sample_distance[:,i] = torch.norm(pred - cls_mat,p=2, dim=1)
   
@@ -262,14 +263,14 @@ def test(e, best_acc):
   # get template latent z
   class_target = torch.LongTensor(list(range(n_classes)))
   class_template = te_loader.load_template(class_target)
-  class_template = class_template.cuda(async=True)
+  class_template = class_template.to(device)
   with torch.no_grad():
     class_recon, _, _, class_z  = net(class_template)
   
   for i, (input, target, template) in enumerate(testloader):
 
     target = torch.squeeze(target)
-    input, template = input.cuda(async=True), template.cuda(async=True)
+    input, template = input.to(device), template.to(device)
     with torch.no_grad():
       recon, _, _, z  = net(input)
     
@@ -360,8 +361,12 @@ def test(e, best_acc):
     
   #### Save weights and scores
   if e % 100 == 0:
-    pass
-    torch.save(net.state_dict(), os.path.join('{}_latest_net_ep{}.pth'.format(args.dataset, e)))
+    checkpoint = {
+      'vqvae': net.state_dict(),
+      'discriminator': net_d.state_dict(),
+      'epoch': e
+    }
+    torch.save(checkpoint, os.path.join('{}_latest_net_ep{}.pth'.format(args.dataset, e)))
 
   ############# Plot scores
   mean_scores.append(acc_tecls.mean())

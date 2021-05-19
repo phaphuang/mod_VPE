@@ -44,7 +44,7 @@ random.seed(args.seed)
 torch.manual_seed(args.seed)
 plt.switch_backend('agg')  # Allow plotting when running remotely
 
-save_epoch = 100 # save log images per save_epoch
+save_epoch = 2 # save log images per save_epoch
 
 # 02 rotation + flip augmentation option
 # Setup Augmentations
@@ -175,8 +175,9 @@ def score_NN(pred, class_feature, label, n_classes):
   label = label.numpy()
   for i in range(n_classes):
     cls_feat = class_feature[i,:]
+    #print("Class Feature Shape: ", pred.shape, cls_feat.shape)
     cls_mat = cls_feat.repeat(pred.shape[0],1)
-    print("Class Feature Shape: ", cls_feat.shape, cls_mat.shape, pred.shape)
+    #print(cls_mat.shape)
     # euclidean distance
     sample_distance[:,i] = torch.norm(pred - cls_mat,p=2, dim=1)
   
