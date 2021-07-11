@@ -2,3 +2,6 @@ __pycache__
 results*
 img_log*
 *.pth
+bk_*
+runs
+*.ipynb

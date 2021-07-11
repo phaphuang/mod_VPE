@@ -11,8 +11,11 @@
   {
     "data_path": "E:/db/VPE/"
   },
-
   "belga2toplogo":
+  {
+    "data_path": "E:/db/VPE/"
+  },
+  "gtsrbMeta":
   {
     "data_path": "E:/db/VPE/"
   }
