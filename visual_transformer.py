@@ -20,16 +20,14 @@ from loader import get_loader, get_data_path
 from models import get_model
 from augmentations import *
 
-import random
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Setup
 parser = ArgumentParser(description='Variational Prototyping Encoder (VPE)')
 parser.add_argument('--seed',       type=int,
                     default=42,             help='Random seed')
-parser.add_argument('--arch',       type=str,   default='vqvae2Base',
-                    help='network type: vaeIdsia, vaeIdsiaStn')
+parser.add_argument('--arch',       type=str,   default='vaeTranDis',
+                    help='network type: vaeIdsia, vaeIdsiaStn, vaeTranDis')
 parser.add_argument('--dataset',    type=str,   default='gtsrb2TT100K',
                     help='dataset to use [gtsrb, gtsrb2TT100K, belga2flickr, belga2toplogo]')
 parser.add_argument('--exp',        type=str,
@@ -48,29 +46,27 @@ parser.add_argument('--img_cols',   type=int,   default=64,
                     help='resized image width')
 parser.add_argument('--img_rows',   type=int,   default=64,
                     help='resized image height')
-parser.add_argument('--workers',    type=int,   default=1,
+parser.add_argument('--workers',    type=int,   default=4,
                     help='Data loader workers')
 
 args = parser.parse_args()
 
 random.seed(args.seed)
 torch.manual_seed(args.seed)
-np.random.seed(args.seed)
 plt.switch_backend('agg')  # Allow plotting when running remotely
 
-save_epoch = 50  # save log images per save_epoch
+save_epoch = 5  # save log images per save_epoch
 
 # 02 rotation + flip augmentation option
 # Setup Augmentations
 data_aug_tr = Compose([Scale(args.img_cols),  # resize longer side of an image to the defined size
-                      # zero pad remaining regions
+                       # zero pad remaining regions
                        CenterPadding([args.img_rows, args.img_cols]),
                        RandomHorizontallyFlip(),  # random horizontal flip
                        RandomRotate(180)])  # ramdom rotation
 
 data_aug_te = Compose([Scale(args.img_cols),
-                       CenterPadding([args.img_rows, args.img_cols]),
-                       CenterCrop([args.img_rows, args.img_cols])])
+                       CenterPadding([args.img_rows, args.img_cols])])
 
 result_path = 'results_' + args.dataset
 if not os.path.exists(result_path):
@@ -115,6 +111,17 @@ if args.resume is not None:
     pre_params = torch.load(args.resume)
     net.init_params(pre_params)
 
+reconstruction_function = nn.BCELoss()
+reconstruction_function.reduction = 'sum'
+
+
+def loss_function(recon_x, x, mu, logvar):
+    BCE = reconstruction_function(recon_x, x)
+    KLD_element = mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+    KLD = torch.sum(KLD_element).mul_(-0.5)
+    return BCE + KLD
+
+
 # Construct optimiser
 optimizer = optim.Adam(net.parameters(), lr=args.lr)  # 1e-4
 
@@ -122,11 +129,6 @@ num_train = len(tr_loader.targets)
 num_test = len(te_loader.targets)
 batch_iter = math.ceil(num_train/args.batch_size)
 batch_iter_test = math.ceil(num_test/args.batch_size)
-
-#criterion = nn.BCELoss()
-#criterion.reduction = 'mean'
-criterion = nn.MSELoss()
-latent_loss_weight = 0.25
 
 
 def train(e):
@@ -136,33 +138,28 @@ def train(e):
     print('start train epoch: %d' % e)
     net.train()
 
-    for i, (input, target, template) in enumerate(trainloader):
-
-        # if i > 10:
-        #   break
+    for i, (input, target, template, styles) in enumerate(trainloader):
 
         optimizer.zero_grad()
         target = torch.squeeze(target)
         input, template = input.to(device), template.to(device)
+        styles = styles.to(device)
 
-        recon, latent_loss, input_stn, _ = net(input)
-        recon_loss = criterion(recon, template)
-        latent_loss = latent_loss.mean()
-        loss = recon_loss + latent_loss_weight * latent_loss
-
-        print('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  VQ loss:%08f' %
-              (e, i, batch_iter, loss.data, recon_loss.data, latent_loss.data))
+        recon, mu, logvar, input_stn = net(input, styles)
+        # reconstruction loss
+        loss = loss_function(recon, template, mu, logvar)
+        print('Epoch:%d  Batch:%d/%d  loss:%08f' %
+              (e, i, batch_iter, loss.data/input.numel()))
 
         f_loss = open(os.path.join(result_path, "log_loss.txt"), 'a')
-        f_loss.write('Epoch:%d  Batch:%d/%d  Total Loss:%08f Recon loss:%08f  VQ loss:%08f' %
-                     (e, i, batch_iter, loss.data, recon_loss.data, latent_loss.data))
+        f_loss.write('Epoch:%d  Batch:%d/%d  loss:%08f\n' %
+                     (e, i, batch_iter, loss.data/input.numel()))
         f_loss.close()
 
         loss.backward()
         optimizer.step()
 
         if i < 1 and (e % save_epoch == 0):
-            # if (e%save_epoch == 0):
             out_folder = "%s/Epoch_%d_train" % (outimg_path, e)
             out_root = Path(out_folder)
             if not out_root.is_dir():
@@ -170,21 +167,19 @@ def train(e):
 
             torchvision.utils.save_image(
                 input.data, '{}/batch_{}_data.jpg'.format(out_folder, i), nrow=8, padding=2)
-            #torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2)
+            torchvision.utils.save_image(
+                input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
                 recon.data, '{}/batch_{}_recon.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
                 template.data, '{}/batch_{}_target.jpg'.format(out_folder, i), nrow=8, padding=2)
-
-        # if (i > 0) and (i % 10 == 0):
-        #     break
 
     if e % save_epoch == 0:
         class_target = torch.LongTensor(list(range(n_classes)))
         class_template = tr_loader.load_template(class_target)
         class_template = class_template.to(device)
         with torch.no_grad():
-            class_recon, _, _, _ = net(class_template)
+            class_recon, class_mu, class_logvar, _ = net(class_template)
 
         torchvision.utils.save_image(
             class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)
@@ -204,20 +199,7 @@ def score_NN(pred, class_feature, label, n_classes):
     label = label.numpy()
     for i in range(n_classes):
         cls_feat = class_feature[i, :]
-
-        #pred = pred.view(pred.shape[0], -1)
-        #cls_feat = cls_feat.view(-1)
-
-        #print(cls_feat.shape, pred.shape)
-
-        cls_feat = torch.mean(cls_feat.view(cls_feat.size(0), -1), dim=1)
-        pred = torch.mean(pred.view(pred.size(0), pred.size(1), -1), dim=2)
-
-        #print(pred.size(), cls_feat.shape)
-
         cls_mat = cls_feat.repeat(pred.shape[0], 1)
-
-        # print("Class Feature Shape: ", class_feature.shape, cls_feat.shape, pred.shape) # torch.Size([36, 128, 16, 16]) torch.Size([32768]) torch.Size([64, 32768])
         # euclidean distance
         sample_distance[:, i] = torch.norm(pred - cls_mat, p=2, dim=1)
 
@@ -242,26 +224,6 @@ mean_rank = []
 def test(e, best_acc):
     n_classes = te_loader.n_classes
     print('start test epoch: %d' % e)
-
-    old_vars = net.state_dict()
-
-    # Traing meta step
-    for i, (input, target, template) in enumerate(testloader):
-        optimizer.zero_grad()
-        target = torch.squeeze(target)
-        input, template = input.to(device), template.to(device)
-
-        recon, latent_loss, _, _ = net(input)
-        recon_loss = criterion(recon, template)
-        latent_loss = latent_loss.mean()
-        loss = recon_loss + latent_loss_weight * latent_loss
-
-        loss.backward()
-        optimizer.step()
-
-        print('Testing Epoch:%d  Total Loss:%08f Recon loss:%08f  VQ loss:%08f' %
-              (e, loss.data, recon_loss.data, latent_loss.data))
-
     net.eval()
     accum_all = torch.zeros(n_classes)
     rank_all = torch.zeros(n_classes, n_classes)  # rank per class
@@ -270,19 +232,19 @@ def test(e, best_acc):
     # get template latent z
     class_target = torch.LongTensor(list(range(n_classes)))
     class_template = te_loader.load_template(class_target)
-    class_template = class_template.cuda(async=True)
+    class_template = class_template.to(device)
     with torch.no_grad():
-        class_recon, _, _, class_z = net(class_template)
+        class_recon, class_mu, class_logvar, _ = net(class_template)
 
     for i, (input, target, template) in enumerate(testloader):
 
         target = torch.squeeze(target)
-        input, template = input.cuda(async=True), template.cuda(async=True)
+        input, template = input.to(device), template.to(device)
         with torch.no_grad():
-            recon, _, input_stn, z = net(input)
+            recon, mu, logvar, input_stn = net(input)
 
         sample_correct, sample_all, sample_rank = score_NN(
-            z, class_z, target, n_classes)
+            mu, class_mu, target, n_classes)
         accum_class += sample_correct
         accum_all += sample_all
         rank_all = rank_all + sample_rank  # [class_id, topN]
@@ -297,7 +259,8 @@ def test(e, best_acc):
 
             torchvision.utils.save_image(
                 input.data, '{}/batch_{}_data.jpg'.format(out_folder, i), nrow=8, padding=2)
-            #torchvision.utils.save_image(input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2)
+            torchvision.utils.save_image(
+                input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
                 recon.data, '{}/batch_{}_recon.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
@@ -308,8 +271,6 @@ def test(e, best_acc):
             class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)
         torchvision.utils.save_image(
             class_recon.data, '{}/templates_recon.jpg'.format(out_folder), nrow=8, padding=2)
-    
-    net.load_state_dict(old_vars)
 
     acc_all = accum_class.sum() / accum_all.sum()
     acc_cls = torch.div(accum_class, accum_all)
@@ -380,10 +341,9 @@ def test(e, best_acc):
         f_rank.close()
 
     # Save weights and scores
-    if e % 100 == 0:
-        pass
-        torch.save(net.state_dict(), os.path.join(
-            '{}_latest_net_ep{}.pth'.format(args.dataset, e)))
+    # if e % 100 == 0:
+    #   pass
+        # torch.save(net.state_dict(), os.path.join('flickr2belga_latest_net.pth'))
 
     # Plot scores
     mean_scores.append(acc_tecls.mean())
@@ -404,5 +364,4 @@ if __name__ == "__main__":
     best_acc = 0
     for e in range(1, args.epochs + 1):
         train(e)
-        if (e % save_epoch == 0):
-            best_acc = test(e, best_acc)
+        best_acc = test(e, best_acc)

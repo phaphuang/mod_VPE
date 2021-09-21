@@ -5,10 +5,11 @@ import scipy.misc as m
 # from augmentations import *
 # from models import get_model
 import random
+from glob import glob
 
 class gtsrb2TT100KLoader(Dataset):
 
-  def __init__(self, root, exp, split='train', is_transform=False, img_size=None, augmentations=None, prototype_sampling_rate=0.001):
+  def __init__(self, root, exp, split='train', is_transform=False, img_size=None, augmentations=None, prototype_sampling_rate=0.001, n_style=4):
     super().__init__()
     
     if split == 'train':
@@ -19,6 +20,7 @@ class gtsrb2TT100KLoader(Dataset):
     self.inputs = []
     self.targets = []
     self.class_names = []
+    self.n_style = n_style
 
     if split == 'train':
         self.split = 'GTSRB'
@@ -88,7 +90,18 @@ class gtsrb2TT100KLoader(Dataset):
 
     gt = gt-1
 
-    return img, gt, template
+    styles = glob(self.root + self.split + "/template_ordered/*.jpg")
+    sample_styles = random.sample((list(styles)), self.n_style)
+    selected_styles = []
+    if self.n_style == 1:
+      selected_styles.append(self.transform(m.imread(sample_styles[0])))
+    else:
+      for s in sample_styles:
+        selected_styles.append(self.transform(m.imread(s)))
+    
+    selected_styles = torch.cat(selected_styles)
+
+    return img, gt, template, selected_styles
     
   def transform(self, img):
     img = img.astype(np.float64)
