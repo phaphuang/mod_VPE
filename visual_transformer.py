@@ -52,9 +52,9 @@ parser.add_argument('--img_rows',   type=int,   default=64,
 parser.add_argument('--workers',    type=int,   default=4,
                     help='Data loader workers')
 
-parser.add_argument("--lambda_attr", type=float, default=0.3, help='discriminator predict attribute loss lambda')
-parser.add_argument("--lambda_GAN", type=float, default=0.2, help='GAN loss lambda')
-parser.add_argument("--lambda_l1", type=float, default=0.5, help='pixel l1 loss lambda')
+parser.add_argument("--lambda_attr", type=float, default=1, help='discriminator predict attribute loss lambda')
+parser.add_argument("--lambda_GAN", type=float, default=1, help='GAN loss lambda')
+parser.add_argument("--lambda_l1", type=float, default=1, help='pixel l1 loss lambda')
 
 args = parser.parse_args()
 
@@ -150,7 +150,8 @@ batch_iter_test = math.ceil(num_test/args.batch_size)
 patch = (1, args.img_cols // 2**4, args.img_cols // 2**4)
 
 # Loss criterion
-criterion_GAN = torch.nn.MSELoss().to(device)
+#criterion_GAN = torch.nn.MSELoss().to(device)
+criterion_GAN = torch.nn.BCELoss().to(device)
 criterion_pixel = torch.nn.L1Loss().to(device)
 criterion_ce = torch.nn.CrossEntropyLoss().to(device)
 criterion_attr = torch.nn.MSELoss().to(device)
@@ -161,6 +162,8 @@ attrid = torch.tensor([i for i in range(num_classes)]).to(device)
 attrid = attrid.view(1, attrid.size(0))
 attrid = attrid.repeat(args.batch_size, 1)
 
+real_label = 1.0
+fake_label = 0.0
 
 def train(e):
     n_classes = tr_loader.n_classes
@@ -172,8 +175,11 @@ def train(e):
 
     for i, (input, target, template, style) in enumerate(trainloader):
 
-        valid = torch.ones((input.size(0), *patch)).to(device)
-        fake = torch.zeros((input.size(0), *patch)).to(device)
+        #valid = torch.ones((input.size(0), *patch)).to(device)
+        #fake = torch.zeros((input.size(0), *patch)).to(device)
+
+        valid = torch.full((input.size(0),), real_label, dtype=torch.float, device=device)
+        fake = torch.full((input.size(0),), fake_label, dtype=torch.float, device=device)
 
         # Construct attribute
         attr_raw = attribute_embed(attrid)
@@ -195,6 +201,7 @@ def train(e):
         #loss = loss_function(recon, template, mu, logvar)
 
         pred_recon, recon_class = discriminator(recon)
+
         loss_GAN = args.lambda_GAN * criterion_GAN(pred_recon, valid)
         # Reconstruction loss
         loss_pixel = args.lambda_l1 * criterion_pixel(recon, template)
@@ -205,7 +212,7 @@ def train(e):
 
         #print(recon_class.shape, target.shape)
 
-        loss_attr = torch.zeros(1).to(device)
+        loss_attr = 0.0
         loss_attr += args.lambda_attr * criterion_attr(recon_class, target)
         loss_attr += args.lambda_attr * criterion_attr(template_class, target)
 
@@ -256,10 +263,11 @@ def train(e):
 
     if e % save_epoch == 0:
         class_target = torch.LongTensor(list(range(n_classes)))
-        class_template = tr_loader.load_template(class_target)
+        class_template, tr_style = tr_loader.load_template(class_target)
         class_template = class_template.to(device)
+        tr_style = tr_style.to(device)
         with torch.no_grad():
-            class_recon, class_mu, class_logvar, _ = net(class_template, style)
+            class_recon, class_mu, class_logvar, _ = net(class_template, tr_style)
 
         torchvision.utils.save_image(
             class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)
