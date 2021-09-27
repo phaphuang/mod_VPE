@@ -78,7 +78,7 @@ class stn(nn.Module):
 class VAETranDis(nn.Module):
     def __init__(self, nc, input_size, latent_variable_size=300, cnn_chn=[100, 150, 250], 
                 param1=None, param2=None, param3=None,
-                in_channel=3, n_style=4, style_out_channel=256,attention=True, n_res_blocks=8):
+                n_style=4, style_out_channel=256,attention=True, n_res_blocks=8):
         super(VAETranDis, self).__init__()
 
         self.cnn_chn = cnn_chn
@@ -131,7 +131,7 @@ class VAETranDis(nn.Module):
         if param3 is not None:
             self.stn3 = stn(self.cnn_chn[1], self.input_size/4, param3)
 
-        self.style_enc = StyleEncoder(in_channel=in_channel, n_style=n_style,
+        self.style_enc = StyleEncoder(in_channel=nc, n_style=n_style,
                                       style_out_channel=style_out_channel, attention=attention, 
                                       n_res_blocks=n_res_blocks)
 
@@ -306,6 +306,7 @@ class StyleEncoder(nn.Module):
         target_style = self.res_layer(source_style)
         return target_style
 
+"""
 class Discriminators(nn.Module):
     # No instancenorm in fcs in source code, which is different from paper.
     def __init__(self, dim=64, norm_fn='instancenorm', acti_fn='lrelu',
@@ -335,3 +336,75 @@ class Discriminators(nn.Module):
         h = self.conv(x)
         h = h.view(h.size(0), -1)
         return self.fc_adv(h), self.fc_cls(h)
+"""
+
+class AttrClassifier(nn.Module):
+    def __init__(self, in_channel=3, num_classes=43):
+        super(AttrClassifier, self).__init__()
+
+        def discriminator_block(in_filters, out_filters, normalize=True):
+            layers = [nn.Conv2d(in_filters, out_filters, 4, 2, 1)]
+            if normalize:
+                layers.append(nn.InstanceNorm2d(out_filters))
+            layers.append(nn.LeakyReLU(0.01))
+            return layers
+
+        self.model = nn.Sequential(
+            *discriminator_block(in_channel, 64, normalize=False),
+            *discriminator_block(64, 128),
+            *discriminator_block(128, 256),
+            *discriminator_block(256, 256),
+            nn.ZeroPad2d((1, 0, 1, 0)),
+        )
+        self.head_0 = nn.Sequential(
+            nn.Conv2d(256, 256, 4, padding=1, bias=True),
+            nn.InstanceNorm2d(256),
+            nn.LeakyReLU(0.01),
+        )
+        self.head_1 = nn.Linear(256*4*4, num_classes, True)
+
+    def forward(self, img):
+        out = self.model(img)
+        out = self.head_0(out)
+        out = out.view(out.size(0), out.size(1) * out.size(2) * out.size(3))
+        out = self.head_1(out)
+        return out
+
+class DiscriminatorWithClassifier(nn.Module):
+    def __init__(self, in_channel=3, num_classes=43, pred_attr=True):
+        super(DiscriminatorWithClassifier, self).__init__()
+        self.pred_attr = pred_attr
+
+        def discriminator_block(in_filters, out_filters, normalize=True):
+            layers = [nn.Conv2d(in_filters, out_filters, 4, 2, 1)]
+            if normalize:
+                layers.append(nn.InstanceNorm2d(out_filters))
+            layers.append(nn.LeakyReLU(0.1))
+            return layers
+
+        self.model = nn.Sequential(
+            *discriminator_block(in_channel, 64, normalize=False),
+            *discriminator_block(64, 128),
+            *discriminator_block(128, 256),
+            *discriminator_block(256, 256),
+            nn.ZeroPad2d((1, 0, 1, 0)),
+        )
+
+        self.model_one_input = nn.Sequential(
+            *discriminator_block(in_channel, 64, normalize=False),
+            *discriminator_block(64, 128),
+            *discriminator_block(128, 256),
+            *discriminator_block(256, 256),
+            nn.ZeroPad2d((1, 0, 1, 0)),
+        )
+
+        self.f = nn.Conv2d(256, 1, 4, padding=1, bias=False)
+        
+        self.auxiliary_cls = AttrClassifier(in_channel=in_channel, num_classes=num_classes)
+
+    def forward(self, img):
+        out = self.model(img)
+        out_rf = self.f(out)  # real or fake for image
+        out_attr = self.auxiliary_cls(img)
+        
+        return out_rf, out_attr

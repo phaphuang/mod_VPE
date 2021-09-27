@@ -94,10 +94,20 @@ class gtsrb2TT100KLoader(Dataset):
     sample_styles = random.sample((list(styles)), self.n_style)
     selected_styles = []
     if self.n_style == 1:
-      selected_styles.append(self.transform(m.imread(sample_styles[0])))
+      sample_img = m.imread(sample_styles[0])
+      if self.augmentations is not None:
+        sample_img, _ = self.augmentations(sample_img, sample_img)
+      if self.is_transform:
+        sample_img = self.transform(sample_img) 
+      selected_styles.append(sample_img)
     else:
       for s in sample_styles:
-        selected_styles.append(self.transform(m.imread(s)))
+        sample_img = m.imread(s)
+        if self.augmentations is not None:
+          sample_img, _ = self.augmentations(sample_img, sample_img)
+        if self.is_transform:
+          sample_img = self.transform(sample_img)
+        selected_styles.append(sample_img)
     
     selected_styles = torch.cat(selected_styles)
 
@@ -121,13 +131,28 @@ class gtsrb2TT100KLoader(Dataset):
   def load_template(self, target, augmentations=None):
     # if augmentation is not specified, use self.augmentations. Unless use input augmentation option.
     if augmentations is None:
-        augmentations = self.augmentations
+      augmentations = self.augmentations
     img_paths = []
     
     for id in target:
-        img_paths.append(self.root + self.split +'/template_ordered/%02d.jpg'%(id+1))
+      img_paths.append(self.root + self.split +'/template_ordered/%02d.jpg'%(id+1))
+
+    target_style = []
+    for img_path in img_paths[:self.n_style]:
+      img = m.imread(img_path)
+      img = np.array(img, dtype=np.uint8)
+
+      if augmentations is not None:
+        img, _ = augmentations(img, img)
+      if self.transform:
+        img = self.transform(img)
+
+      target_style.append(img)
+    
+    target_style = torch.cat(target_style)
 
     target_img = []
+    target_styles = []
     for img_path in img_paths:
         img = m.imread(img_path)
         img = np.array(img, dtype=np.uint8)
@@ -138,5 +163,6 @@ class gtsrb2TT100KLoader(Dataset):
             img = self.transform(img)
 
         target_img.append(img)
+        target_styles.append(target_style)
 
-    return torch.stack(target_img, dim=0)
+    return torch.stack(target_img, dim=0), torch.stack(target_styles, dim=0) # stack = [4, 3, 64, 64], cat = [12, 64, 64]

@@ -1,4 +1,5 @@
 from argparse import ArgumentParser
+#from models.vaeTranDis import Discriminators
 import os
 import random
 from matplotlib import pyplot as plt
@@ -15,6 +16,8 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 import torchvision
 from torchvision import datasets, transforms
+
+from models.vaeTranDis import DiscriminatorWithClassifier
 
 from loader import get_loader, get_data_path
 from models import get_model
@@ -49,13 +52,17 @@ parser.add_argument('--img_rows',   type=int,   default=64,
 parser.add_argument('--workers',    type=int,   default=4,
                     help='Data loader workers')
 
+parser.add_argument("--lambda_attr", type=float, default=0.3, help='discriminator predict attribute loss lambda')
+parser.add_argument("--lambda_GAN", type=float, default=0.2, help='GAN loss lambda')
+parser.add_argument("--lambda_l1", type=float, default=0.5, help='pixel l1 loss lambda')
+
 args = parser.parse_args()
 
 random.seed(args.seed)
 torch.manual_seed(args.seed)
 plt.switch_backend('agg')  # Allow plotting when running remotely
 
-save_epoch = 5  # save log images per save_epoch
+save_epoch = 10  # save log images per save_epoch
 
 # 02 rotation + flip augmentation option
 # Setup Augmentations
@@ -114,6 +121,10 @@ if args.resume is not None:
 reconstruction_function = nn.BCELoss()
 reconstruction_function.reduction = 'sum'
 
+num_classes = 43
+discriminator = DiscriminatorWithClassifier(in_channel=3, num_classes=num_classes).to(device)
+attribute_embed = nn.Embedding(num_classes, 64).to(device)
+
 
 def loss_function(recon_x, x, mu, logvar):
     BCE = reconstruction_function(recon_x, x)
@@ -123,12 +134,32 @@ def loss_function(recon_x, x, mu, logvar):
 
 
 # Construct optimiser
-optimizer = optim.Adam(net.parameters(), lr=args.lr)  # 1e-4
+optimizer_G = optim.Adam([
+    {'params': net.parameters()},
+    {'params': attribute_embed.parameters(), 'lr': 1e-3}], 
+    lr=args.lr
+)  # 1e-4
+optimizer_D = optim.Adam(discriminator.parameters(), lr=args.lr)
 
 num_train = len(tr_loader.targets)
 num_test = len(te_loader.targets)
 batch_iter = math.ceil(num_train/args.batch_size)
 batch_iter_test = math.ceil(num_test/args.batch_size)
+
+# Discriminator output patch shape
+patch = (1, args.img_cols // 2**4, args.img_cols // 2**4)
+
+# Loss criterion
+criterion_GAN = torch.nn.MSELoss().to(device)
+criterion_pixel = torch.nn.L1Loss().to(device)
+criterion_ce = torch.nn.CrossEntropyLoss().to(device)
+criterion_attr = torch.nn.MSELoss().to(device)
+criterion_bce = torch.nn.BCELoss().to(device)
+
+#### Create class id
+attrid = torch.tensor([i for i in range(num_classes)]).to(device)
+attrid = attrid.view(1, attrid.size(0))
+attrid = attrid.repeat(args.batch_size, 1)
 
 
 def train(e):
@@ -137,27 +168,76 @@ def train(e):
 
     print('start train epoch: %d' % e)
     net.train()
+    discriminator.train()
 
-    for i, (input, target, template, styles) in enumerate(trainloader):
+    for i, (input, target, template, style) in enumerate(trainloader):
 
-        optimizer.zero_grad()
+        valid = torch.ones((input.size(0), *patch)).to(device)
+        fake = torch.zeros((input.size(0), *patch)).to(device)
+
+        # Construct attribute
+        attr_raw = attribute_embed(attrid)
+
+        optimizer_G.zero_grad()
         target = torch.squeeze(target)
         input, template = input.to(device), template.to(device)
-        styles = styles.to(device)
+        style = style.to(device)
+        
+        target = target.to(device)
+        #print(target.shape, attr_raw.shape)
+        #target = target * attr_raw
+        #print(target.shape)
+        target = F.one_hot(target, num_classes=num_classes).float()
 
-        recon, mu, logvar, input_stn = net(input, styles)
+        recon, mu, logvar, input_stn = net(input, style)
+
         # reconstruction loss
-        loss = loss_function(recon, template, mu, logvar)
-        print('Epoch:%d  Batch:%d/%d  loss:%08f' %
-              (e, i, batch_iter, loss.data/input.numel()))
+        #loss = loss_function(recon, template, mu, logvar)
+
+        pred_recon, recon_class = discriminator(recon)
+        loss_GAN = args.lambda_GAN * criterion_GAN(pred_recon, valid)
+        # Reconstruction loss
+        loss_pixel = args.lambda_l1 * criterion_pixel(recon, template)
+
+        # Class Prediction
+        pred_template, template_class = discriminator(template)
+        loss_GAN += args.lambda_GAN * criterion_GAN(pred_template, valid)
+
+        #print(recon_class.shape, target.shape)
+
+        loss_attr = torch.zeros(1).to(device)
+        loss_attr += args.lambda_attr * criterion_attr(recon_class, target)
+        loss_attr += args.lambda_attr * criterion_attr(template_class, target)
+
+        loss_G = loss_GAN + loss_pixel + loss_attr
+
+        loss_G.backward()
+        optimizer_G.step()
+
+        #### Training discriminator ####
+        optimizer_D.zero_grad()
+        pred_real, real_class = discriminator(input)
+        loss_real = criterion_GAN(pred_real, valid)
+
+        loss_attr_D = torch.zeros(1).to(device)
+        loss_attr_D += criterion_attr(real_class, target)
+
+        # Criterion GAN
+        recon, mu, logvar, input_stn = net(input, style)
+        pred_recon, recon_class = discriminator(recon)
+        loss_fake = criterion_GAN(pred_recon, fake)
+        loss_D = loss_real + loss_fake + loss_attr_D
+
+        loss_D.backward()
+        optimizer_D.step()
+        
+        print('Epoch:%d  Batch:%d/%d  loss G:%08f loss D:%08f' %
+              (e, i, batch_iter, loss_G.data, loss_D.data))
 
         f_loss = open(os.path.join(result_path, "log_loss.txt"), 'a')
         f_loss.write('Epoch:%d  Batch:%d/%d  loss:%08f\n' %
-                     (e, i, batch_iter, loss.data/input.numel()))
+                     (e, i, batch_iter, loss_G.data/input.numel()))
         f_loss.close()
-
-        loss.backward()
-        optimizer.step()
 
         if i < 1 and (e % save_epoch == 0):
             out_folder = "%s/Epoch_%d_train" % (outimg_path, e)
@@ -167,8 +247,8 @@ def train(e):
 
             torchvision.utils.save_image(
                 input.data, '{}/batch_{}_data.jpg'.format(out_folder, i), nrow=8, padding=2)
-            torchvision.utils.save_image(
-                input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2)
+            #torchvision.utils.save_image(
+            #    input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
                 recon.data, '{}/batch_{}_recon.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
@@ -179,7 +259,7 @@ def train(e):
         class_template = tr_loader.load_template(class_target)
         class_template = class_template.to(device)
         with torch.no_grad():
-            class_recon, class_mu, class_logvar, _ = net(class_template)
+            class_recon, class_mu, class_logvar, _ = net(class_template, style)
 
         torchvision.utils.save_image(
             class_template.data, '{}/templates.jpg'.format(out_folder), nrow=8, padding=2)
@@ -197,6 +277,13 @@ def score_NN(pred, class_feature, label, n_classes):
     pred = pred.data.cpu()  # batch x latent size
     class_feature = class_feature.data.cpu()  # n_classes x latent size
     label = label.numpy()
+
+    mean = class_feature.mean(0)
+    pred -= mean
+    class_feature -= mean
+    pred = pred/torch.norm(pred, p=2, dim=1, keepdim=True)
+    class_feature = class_feature/torch.norm(class_feature, p=2, dim=1, keepdim=True)
+
     for i in range(n_classes):
         cls_feat = class_feature[i, :]
         cls_mat = cls_feat.repeat(pred.shape[0], 1)
@@ -216,10 +303,8 @@ def score_NN(pred, class_feature, label, n_classes):
 
     return sample_correct, sample_all, sample_rank
 
-
 mean_scores = []
 mean_rank = []
-
 
 def test(e, best_acc):
     n_classes = te_loader.n_classes
@@ -231,17 +316,22 @@ def test(e, best_acc):
 
     # get template latent z
     class_target = torch.LongTensor(list(range(n_classes)))
-    class_template = te_loader.load_template(class_target)
+    class_template, te_style = te_loader.load_template(class_target)
     class_template = class_template.to(device)
-    with torch.no_grad():
-        class_recon, class_mu, class_logvar, _ = net(class_template)
+    te_style = te_style.to(device)
 
-    for i, (input, target, template) in enumerate(testloader):
+    #print(class_template.shape, te_style.shape)
+
+    with torch.no_grad():
+        class_recon, class_mu, class_logvar, _ = net(class_template, te_style)
+
+    for i, (input, target, template, style) in enumerate(testloader):
 
         target = torch.squeeze(target)
         input, template = input.to(device), template.to(device)
+        style = style.to(device)
         with torch.no_grad():
-            recon, mu, logvar, input_stn = net(input)
+            recon, mu, logvar, input_stn = net(input, style)
 
         sample_correct, sample_all, sample_rank = score_NN(
             mu, class_mu, target, n_classes)
@@ -259,8 +349,8 @@ def test(e, best_acc):
 
             torchvision.utils.save_image(
                 input.data, '{}/batch_{}_data.jpg'.format(out_folder, i), nrow=8, padding=2)
-            torchvision.utils.save_image(
-                input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2)
+            #torchvision.utils.save_image(
+            #    input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
                 recon.data, '{}/batch_{}_recon.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
