@@ -123,7 +123,6 @@ reconstruction_function.reduction = 'sum'
 
 num_classes = 43
 discriminator = DiscriminatorWithClassifier(in_channel=3, num_classes=num_classes).to(device)
-attribute_embed = nn.Embedding(num_classes, 64).to(device)
 
 
 def loss_function(recon_x, x, mu, logvar):
@@ -134,11 +133,7 @@ def loss_function(recon_x, x, mu, logvar):
 
 
 # Construct optimiser
-optimizer_G = optim.Adam([
-    {'params': net.parameters()},
-    {'params': attribute_embed.parameters(), 'lr': 1e-3}], 
-    lr=args.lr
-)  # 1e-4
+optimizer_G = optim.Adam(net.parameters(), lr=args.lr)
 optimizer_D = optim.Adam(discriminator.parameters(), lr=args.lr)
 
 num_train = len(tr_loader.targets)
@@ -153,6 +148,7 @@ patch = (1, args.img_cols // 2**4, args.img_cols // 2**4)
 criterion_GAN = torch.nn.MSELoss().to(device)
 criterion_pixel = torch.nn.L1Loss().to(device)
 criterion_ce = torch.nn.CrossEntropyLoss().to(device)
+#criterion_attr = torch.nn.MSELoss().to(device)
 criterion_attr = torch.nn.BCEWithLogitsLoss().to(device)
 
 
