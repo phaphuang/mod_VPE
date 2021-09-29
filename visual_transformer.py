@@ -52,9 +52,9 @@ parser.add_argument('--img_rows',   type=int,   default=64,
 parser.add_argument('--workers',    type=int,   default=4,
                     help='Data loader workers')
 
-parser.add_argument("--lambda_attr", type=float, default=1, help='discriminator predict attribute loss lambda')
-parser.add_argument("--lambda_GAN", type=float, default=1, help='GAN loss lambda')
-parser.add_argument("--lambda_l1", type=float, default=1, help='pixel l1 loss lambda')
+parser.add_argument("--lambda_attr", type=float, default=20, help='discriminator predict attribute loss lambda')
+parser.add_argument("--lambda_GAN", type=float, default=5, help='GAN loss lambda')
+parser.add_argument("--lambda_l1", type=float, default=50, help='pixel l1 loss lambda')
 
 args = parser.parse_args()
 
@@ -106,9 +106,9 @@ te_loader = data_loader(data_path, args.exp, is_transform=True, split='test', im
     args.img_rows, args.img_cols), augmentations=data_aug_te)
 
 trainloader = DataLoader(tr_loader, batch_size=args.batch_size,
-                         num_workers=args.workers, shuffle=True, pin_memory=True)
+                         num_workers=args.workers, shuffle=True, pin_memory=False)
 testloader = DataLoader(te_loader, batch_size=args.batch_size,
-                        num_workers=args.workers, shuffle=True, pin_memory=True)
+                        num_workers=args.workers, shuffle=True, pin_memory=False)
 
 # define model or load model
 net = get_model(args.arch, n_classes=None)
@@ -150,20 +150,11 @@ batch_iter_test = math.ceil(num_test/args.batch_size)
 patch = (1, args.img_cols // 2**4, args.img_cols // 2**4)
 
 # Loss criterion
-#criterion_GAN = torch.nn.MSELoss().to(device)
-criterion_GAN = torch.nn.BCELoss().to(device)
+criterion_GAN = torch.nn.MSELoss().to(device)
 criterion_pixel = torch.nn.L1Loss().to(device)
 criterion_ce = torch.nn.CrossEntropyLoss().to(device)
-criterion_attr = torch.nn.MSELoss().to(device)
-criterion_bce = torch.nn.BCELoss().to(device)
+criterion_attr = torch.nn.BCEWithLogitsLoss().to(device)
 
-#### Create class id
-attrid = torch.tensor([i for i in range(num_classes)]).to(device)
-attrid = attrid.view(1, attrid.size(0))
-attrid = attrid.repeat(args.batch_size, 1)
-
-real_label = 1.0
-fake_label = 0.0
 
 def train(e):
     n_classes = tr_loader.n_classes
@@ -175,14 +166,8 @@ def train(e):
 
     for i, (input, target, template, style) in enumerate(trainloader):
 
-        #valid = torch.ones((input.size(0), *patch)).to(device)
-        #fake = torch.zeros((input.size(0), *patch)).to(device)
-
-        valid = torch.full((input.size(0),), real_label, dtype=torch.float, device=device)
-        fake = torch.full((input.size(0),), fake_label, dtype=torch.float, device=device)
-
-        # Construct attribute
-        attr_raw = attribute_embed(attrid)
+        valid = torch.ones((input.size(0), *patch)).to(device)
+        fake = torch.zeros((input.size(0), *patch)).to(device)
 
         optimizer_G.zero_grad()
         target = torch.squeeze(target)
@@ -190,9 +175,6 @@ def train(e):
         style = style.to(device)
         
         target = target.to(device)
-        #print(target.shape, attr_raw.shape)
-        #target = target * attr_raw
-        #print(target.shape)
         target = F.one_hot(target, num_classes=num_classes).float()
 
         recon, mu, logvar, input_stn = net(input, style)
@@ -201,20 +183,11 @@ def train(e):
         #loss = loss_function(recon, template, mu, logvar)
 
         pred_recon, recon_class = discriminator(recon)
-
         loss_GAN = args.lambda_GAN * criterion_GAN(pred_recon, valid)
         # Reconstruction loss
         loss_pixel = args.lambda_l1 * criterion_pixel(recon, template)
 
-        # Class Prediction
-        pred_template, template_class = discriminator(template)
-        loss_GAN += args.lambda_GAN * criterion_GAN(pred_template, valid)
-
-        #print(recon_class.shape, target.shape)
-
-        loss_attr = 0.0
-        loss_attr += args.lambda_attr * criterion_attr(recon_class, target)
-        loss_attr += args.lambda_attr * criterion_attr(template_class, target)
+        loss_attr = args.lambda_attr * criterion_attr(recon_class, target)
 
         loss_G = loss_GAN + loss_pixel + loss_attr
 
@@ -254,8 +227,6 @@ def train(e):
 
             torchvision.utils.save_image(
                 input.data, '{}/batch_{}_data.jpg'.format(out_folder, i), nrow=8, padding=2)
-            #torchvision.utils.save_image(
-            #    input_stn.data, '{}/batch_{}_data_stn.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
                 recon.data, '{}/batch_{}_recon.jpg'.format(out_folder, i), nrow=8, padding=2)
             torchvision.utils.save_image(
@@ -326,20 +297,26 @@ def test(e, best_acc):
     class_target = torch.LongTensor(list(range(n_classes)))
     class_template, te_style = te_loader.load_template(class_target)
     class_template = class_template.to(device)
-    te_style = te_style.to(device)
+    # te_style = te_style.to(device)
 
-    #print(class_template.shape, te_style.shape)
+    _, tr_style = tr_loader.load_template(class_target)
+    tr_style = tr_style.to(device)
 
     with torch.no_grad():
-        class_recon, class_mu, class_logvar, _ = net(class_template, te_style)
+        class_recon, class_mu, class_logvar, _ = net(class_template, tr_style)
 
     for i, (input, target, template, style) in enumerate(testloader):
 
         target = torch.squeeze(target)
         input, template = input.to(device), template.to(device)
-        style = style.to(device)
+        #style = style.to(device)
+
+        #### Loading original style
+        _, tr_style = tr_loader.load_template(target)
+        tr_style = tr_style.to(device)
+
         with torch.no_grad():
-            recon, mu, logvar, input_stn = net(input, style)
+            recon, mu, logvar, input_stn = net(input, tr_style)
 
         sample_correct, sample_all, sample_rank = score_NN(
             mu, class_mu, target, n_classes)
@@ -409,7 +386,13 @@ def test(e, best_acc):
 
         f_iou_class = open(os.path.join(result_path, "best_iou.txt"), 'w')
         f_rank = open(os.path.join(result_path, "best_rank.txt"), 'w')
-        torch.save(net.state_dict(), os.path.join(
+
+        checkpoint = {
+            'discriminator': discriminator.state_dict(),
+            'generator': net.state_dict(),
+            'epoch': e
+        }
+        torch.save(checkpoint, os.path.join(
             '%s_testBest_net.pth' % args.dataset))
 
         best_acc = acc_tecls.mean()
