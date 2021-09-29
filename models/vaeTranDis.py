@@ -370,41 +370,43 @@ class AttrClassifier(nn.Module):
         out = self.head_1(out)
         return out
 
+
 class DiscriminatorWithClassifier(nn.Module):
-    def __init__(self, in_channel=3, num_classes=43, pred_attr=True):
+    def __init__(self, in_channel=3, num_classes=43, pred_attr=True, dim=64, norm_fn='instancenorm', acti_fn='lrelu',
+                fc_dim=1024, fc_norm_fn='none', fc_acti_fn='lrelu', n_layers=5, img_size=64):
         super(DiscriminatorWithClassifier, self).__init__()
         self.pred_attr = pred_attr
 
-        def discriminator_block(in_filters, out_filters, normalize=True):
-            layers = [nn.Conv2d(in_filters, out_filters, 4, 2, 1)]
-            if normalize:
-                layers.append(nn.InstanceNorm2d(out_filters))
-            layers.append(nn.LeakyReLU(0.1))
-            return layers
+        self.f_size = img_size // 2**n_layers
 
-        self.model = nn.Sequential(
-            *discriminator_block(in_channel, 64, normalize=False),
-            *discriminator_block(64, 128),
-            *discriminator_block(128, 256),
-            *discriminator_block(256, 256),
-            nn.ZeroPad2d((1, 0, 1, 0)),
+        layers = []
+        n_in = in_channel
+        for i in range(n_layers):
+            n_out = min(dim * 2**i, MAX_DIM)
+            layers += [Conv2dBlock(
+                n_in, n_out, (4, 4), stride=2, padding=1, norm_fn=norm_fn, acti_fn=acti_fn
+            )]
+            n_in = n_out
+        self.conv = nn.Sequential(*layers)
+        self.fc_adv = nn.Sequential(
+            LinearBlock(1024 * self.f_size * self.f_size, fc_dim, fc_norm_fn, fc_acti_fn),
+            LinearBlock(fc_dim, 1, 'none', 'none'),
+            nn.Sigmoid()
         )
-
-        self.model_one_input = nn.Sequential(
-            *discriminator_block(in_channel, 64, normalize=False),
-            *discriminator_block(64, 128),
-            *discriminator_block(128, 256),
-            *discriminator_block(256, 256),
-            nn.ZeroPad2d((1, 0, 1, 0)),
+        self.fc_cls = nn.Sequential(
+            LinearBlock(1024 * self.f_size * self.f_size, fc_dim, fc_norm_fn, fc_acti_fn),
+            LinearBlock(fc_dim, num_classes, 'none', 'none'),
+            nn.Sigmoid()
         )
-
-        self.f = nn.Conv2d(256, 1, 4, padding=1, bias=False)
         
-        self.auxiliary_cls = AttrClassifier(in_channel=in_channel, num_classes=num_classes)
+        #self.auxiliary_cls = AttrClassifier(in_channel=in_channel, num_classes=num_classes)
 
     def forward(self, img):
-        out = self.model(img)
-        out_rf = self.f(out)  # real or fake for image
-        out_attr = self.auxiliary_cls(img)
+        h = self.conv(img)
+        h = h.view(h.size(0), -1)
+        out_rf = self.fc_adv(h)
+
+        #out_attr = self.auxiliary_cls(img)
+        out_attr = self.fc_cls(h)
         
-        return out_rf, out_attr
+        return out_rf.view(-1), out_attr
