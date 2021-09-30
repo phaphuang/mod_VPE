@@ -69,8 +69,9 @@ save_epoch = 10  # save log images per save_epoch
 data_aug_tr = Compose([Scale(args.img_cols),  # resize longer side of an image to the defined size
                        # zero pad remaining regions
                        CenterPadding([args.img_rows, args.img_cols]),
-                       RandomHorizontallyFlip(),  # random horizontal flip
-                       RandomRotate(180)])  # ramdom rotation
+                       #RandomHorizontallyFlip(),  # random horizontal flip
+                       #RandomRotate(180)
+                ])  # ramdom rotation
 
 data_aug_te = Compose([Scale(args.img_cols),
                        CenterPadding([args.img_rows, args.img_cols])])
@@ -133,7 +134,7 @@ def loss_function(recon_x, x, mu, logvar):
 
 
 # Construct optimiser
-optimizer_G = optim.Adam(net.parameters(), lr=args.lr)
+optimizer_G = optim.Adam(net.parameters(), lr=args.lr)  # 1e-4
 optimizer_D = optim.Adam(discriminator.parameters(), lr=args.lr)
 
 num_train = len(tr_loader.targets)
@@ -148,9 +149,7 @@ patch = (1, args.img_cols // 2**4, args.img_cols // 2**4)
 criterion_GAN = torch.nn.MSELoss().to(device)
 criterion_pixel = torch.nn.L1Loss().to(device)
 criterion_ce = torch.nn.CrossEntropyLoss().to(device)
-#criterion_attr = torch.nn.MSELoss().to(device)
 criterion_attr = torch.nn.BCEWithLogitsLoss().to(device)
-
 
 def train(e):
     n_classes = tr_loader.n_classes
@@ -175,11 +174,10 @@ def train(e):
 
         recon, mu, logvar, input_stn = net(input, style)
 
-        # reconstruction loss
-        #loss = loss_function(recon, template, mu, logvar)
-
+        # Prediction loss
         pred_recon, recon_class = discriminator(recon)
         loss_GAN = args.lambda_GAN * criterion_GAN(pred_recon, valid)
+
         # Reconstruction loss
         loss_pixel = args.lambda_l1 * criterion_pixel(recon, template)
 
@@ -382,7 +380,7 @@ def test(e, best_acc):
 
         f_iou_class = open(os.path.join(result_path, "best_iou.txt"), 'w')
         f_rank = open(os.path.join(result_path, "best_rank.txt"), 'w')
-
+        
         checkpoint = {
             'discriminator': discriminator.state_dict(),
             'generator': net.state_dict(),
