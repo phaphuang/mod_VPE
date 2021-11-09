@@ -5,10 +5,11 @@ import scipy.misc as m
 # from augmentations import *
 # from models import get_model
 import random
+from glob import glob
 
 class belga2flickrLoader(Dataset):
 
-  def __init__(self, root, exp, split='train', is_transform=False, img_size=None, augmentations=None, prototype_sampling_rate = 0.005):
+  def __init__(self, root, exp, split='train', is_transform=False, img_size=None, augmentations=None, prototype_sampling_rate = 0.005, n_style=4):
     super().__init__()
 
     if split == 'train':
@@ -18,6 +19,7 @@ class belga2flickrLoader(Dataset):
     self.inputs = []
     self.targets = []
     self.class_names = []
+    self.n_style = 4
 
     if split == 'train':
         self.split = 'belga'
@@ -90,7 +92,28 @@ class belga2flickrLoader(Dataset):
 
     gt = gt-1
 
-    return img, gt, template
+    styles = glob(self.root + self.split + "/template_ordered/*.jpg")
+    sample_styles = random.sample((list(styles)), self.n_style)
+    selected_styles = []
+    if self.n_style == 1:
+      sample_img = m.imread(sample_styles[0])
+      if self.augmentations is not None:
+        sample_img, _ = self.augmentations(sample_img, sample_img)
+      if self.is_transform:
+        sample_img = self.transform(sample_img) 
+      selected_styles.append(sample_img)
+    else:
+      for s in sample_styles:
+        sample_img = m.imread(s)
+        if self.augmentations is not None:
+          sample_img, _ = self.augmentations(sample_img, sample_img)
+        if self.is_transform:
+          sample_img = self.transform(sample_img)
+        selected_styles.append(sample_img)
+    
+    selected_styles = torch.cat(selected_styles)
+
+    return img, gt, template, selected_styles
     
   def transform(self, img):
     img = img.astype(np.float64)
@@ -115,8 +138,23 @@ class belga2flickrLoader(Dataset):
     
     for id in target:
         img_paths.append(self.root + self.split +'/template_ordered/%02d.jpg'%(id+1))
+    
+    target_style = []
+    for img_path in img_paths[:self.n_style]:
+      img = m.imread(img_path)
+      img = np.array(img, dtype=np.uint8)
+
+      if augmentations is not None:
+        img, _ = augmentations(img, img)
+      if self.transform:
+        img = self.transform(img)
+
+      target_style.append(img)
+    
+    target_style = torch.cat(target_style)
 
     target_img = []
+    target_styles = []
     for img_path in img_paths:
         img = m.imread(img_path)
         img = np.array(img, dtype=np.uint8)
@@ -127,8 +165,9 @@ class belga2flickrLoader(Dataset):
             img = self.transform(img)
 
         target_img.append(img)
+        target_styles.append(target_style)
 
-    return torch.stack(target_img, dim=0)
+    return torch.stack(target_img, dim=0), torch.stack(target_styles, dim=0)
     
 
 

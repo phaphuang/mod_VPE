@@ -59,7 +59,7 @@ parser.add_argument("--lambda_l1", type=float, default=1, help='pixel l1 loss la
 parser.add_argument('--style_out_channel',    type=int,   default=20,
                     help='Output of style encoder')
 
-parser.add_argument('--n_style',    type=int,   default=4,
+parser.add_argument('--n_style',    type=int,   default=8,
                     help='input style of encoder')
 
 args = parser.parse_args()
